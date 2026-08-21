@@ -1,28 +1,34 @@
 """
-Backfill.py
+BronzeBackfill.py
 
-Pulls raw NFL data via nflreadpy and
-writes it as partitioned parquet to the S3 bronze layer, triggered from the
-web app's admin panel via API Gateway. Job status is tracked in DynamoDB so
-the admin panel can poll for real success/failure instead of just trusting
-that "started" means "worked."
+One-time (or on-demand, admin-triggered) historical backfill: pulls raw NFL
+data via nflreadpy and writes it as partitioned parquet to the S3 bronze
+layer, triggered from the web app's admin panel via API Gateway. Job status
+is tracked in DynamoDB so the admin panel can poll for real success/failure
+instead of just trusting that "started" means "worked."
+
+Distinct from the (not yet built) ongoing mid-season ingestion Lambda -
+this one is for pulling multi-season historical ranges on demand; the
+ongoing Lambda will handle keeping the current season's fast-moving
+datasets (depth charts, injuries) fresh throughout the season.
 
 This function handles three things, dispatched inside one handler:
-  1. POST /admin/backfill (API Gateway, synchronous) - validates auth/input,
-     writes a "running" job record to DynamoDB, async-invokes ITSELF (via
-     boto3, InvocationType="Event") with a `_worker` marker + job id, and
-     immediately returns 202 with the job id. API Gateway's HTTP API type
-     only supports synchronous Lambda invocation - there's no built-in
-     "invoke and don't wait" option like REST API's non-proxy integration
-     has, hence the self-invoke instead of a native async integration.
+  1. POST /admin/bronze-backfill (API Gateway, synchronous) - validates
+     auth/input, writes a "running" job record to DynamoDB, async-invokes
+     ITSELF (via boto3, InvocationType="Event") with a `_worker` marker +
+     job id, and immediately returns 202 with the job id. API Gateway's
+     HTTP API type only supports synchronous Lambda invocation - there's no
+     built-in "invoke and don't wait" option like REST API's non-proxy
+     integration has, hence the self-invoke instead of a native async
+     integration.
   2. The detached worker invocation (triggered by #1, never touches API
      Gateway) - does the actual pull/write, then updates the same
      DynamoDB job record with the final status/results. Free of both API
      Gateway's 30s integration timeout and any client-side wait, since
      nothing is listening for its return value.
-  3. GET /admin/backfill/status/{jobId} (API Gateway, synchronous) - reads
-     the job record from DynamoDB and returns it, so the frontend can poll
-     until status is no longer "running".
+  3. GET /admin/bronze-backfill/status/{jobId} (API Gateway, synchronous) -
+     reads the job record from DynamoDB and returns it, so the frontend can
+     poll until status is no longer "running".
 
 Expected API Gateway (Lambda proxy) event body for POST:
     {
@@ -65,8 +71,8 @@ Deploy notes (console-first, see chat):
       automatically instead of accumulating forever.
     - API Gateway routes, both with the Cognito JWT authorizer attached,
       both Lambda proxy integration, both pointing at this function:
-        POST /admin/backfill
-        GET  /admin/backfill/status/{jobId}
+        POST /admin/bronze-backfill
+        GET  /admin/bronze-backfill/status/{jobId}
     - Timeout: the entry paths (POST and GET) only validate/read and
       return fast - a short timeout (10-15s) is fine there. The worker
       invocation runs as a *separate* Lambda execution with its own
@@ -88,8 +94,9 @@ import nflreadpy as nfl
 import polars as pl
 
 # Set via the Lambda's environment variables so the same code/layer can be
-# deployed to a "backfill-dev" function (pointed at dev resources) and a
-# "backfill-prod" function (pointed at prod) without any code diff.
+# deployed to a "fantasy-football-bronze-backfill-dev" function (pointed at
+# dev resources) and a "fantasy-football-bronze-backfill" function (prod)
+# without any code diff.
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
 ADMIN_GROUP = "admin"
@@ -148,7 +155,7 @@ def _create_job(job_id: str, seasons: list[int], purge: bool) -> None:
     jobs_table.put_item(Item={
         "job_id": job_id,
         "status": "running",
-        "message": f"Backfill running for {len(seasons)} season(s).",
+        "message": f"Bronze backfill running for {len(seasons)} season(s).",
         "written": [],
         "errors": [],
         "seasons": seasons,
@@ -202,7 +209,7 @@ def _write_partition(df: pl.DataFrame, dataset: str, season: int) -> str | None:
     return key
 
 
-def _run_backfill(seasons: list[int], purge: bool) -> dict:
+def _run_bronze_backfill(seasons: list[int], purge: bool) -> dict:
     """The actual work - only runs inside the detached async worker invocation."""
     written = []
     errors = []
@@ -221,7 +228,7 @@ def _run_backfill(seasons: list[int], purge: bool) -> dict:
                 errors.append(f"{dataset} season={season}: {e}")
 
     result = {
-        "message": f"Backfill complete: {len(written)} partitions written"
+        "message": f"Bronze backfill complete: {len(written)} partitions written"
         + (f", {len(errors)} errors." if errors else "."),
         "written": written,
         "errors": errors,
@@ -253,7 +260,7 @@ def _validate_request(body: dict) -> tuple[list[int] | None, bool, dict | None]:
 def _handle_worker(event: dict) -> None:
     job_id = event["jobId"]
     try:
-        result = _run_backfill(event["seasons"], event["purge"])
+        result = _run_bronze_backfill(event["seasons"], event["purge"])
         status = "failed" if result["errors"] else "success"
         _finish_job(job_id, status, result)
     except Exception as e:
@@ -297,7 +304,7 @@ def _handle_start_backfill(event: dict, context) -> dict:
     return _response(202, {
         "jobId": job_id,
         "status": "running",
-        "message": f"Backfill started for {len(seasons)} season(s).",
+        "message": f"Bronze backfill started for {len(seasons)} season(s).",
     })
 
 
