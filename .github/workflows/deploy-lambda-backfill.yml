@@ -1,4 +1,4 @@
-name: Deploy Backfill Lambda
+name: Deploy Lambda Backfill
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
       - development
       - main
     paths:
-      - "Backfill/BackfillLambda.py"
-      - ".github/workflows/deploy-backfill-lambda.yml"
+      - "Lambda/Backfill/Backfill.py"
+      - ".github/workflows/deploy-lambda-backfill.yml"
 
 permissions:
   id-token: write # required for OIDC federation with AWS - no stored access keys
@@ -31,14 +31,14 @@ jobs:
 
       - name: Package function code
         run: |
-          cd Lambda\Backfill
+          cd Lambda/Backfill
           zip function.zip Backfill.py
 
       - name: Deploy to Lambda
         run: |
           aws lambda update-function-code \
             --function-name "$FUNCTION_NAME" \
-            --zip-file fileb://Backfill/function.zip
+            --zip-file fileb://Lambda/Backfill/function.zip
 
       - name: Wait for update to finish
         run: |
