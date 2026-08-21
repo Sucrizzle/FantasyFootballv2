@@ -3,15 +3,18 @@ import { fetchAuthSession } from 'aws-amplify/auth'
 import './AdminPage.css'
 
 const CURRENT_YEAR = new Date().getFullYear()
-const YEAR_OPTIONS = Array.from({ length: 15 }, (_, i) => CURRENT_YEAR - i)
+const MOST_RECENT_SEASON = CURRENT_YEAR - 1
+// 15 seasons back from the most recent completed one - the current year is
+// never selectable since its season isn't complete yet.
+const SEASON_OPTIONS = Array.from({ length: 15 }, (_, i) => MOST_RECENT_SEASON - i)
 
 // Set VITE_BACKFILL_API_URL in webapp/.env.local once the API Gateway
 // route is created (see docs comment in BackfillLambda.py).
 const BACKFILL_API_URL = import.meta.env.VITE_BACKFILL_API_URL
 
 export default function AdminPage() {
-  const [startYear, setStartYear] = useState(CURRENT_YEAR - 5)
-  const [endYear, setEndYear] = useState(CURRENT_YEAR)
+  const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 5)
+  const [endSeason, setEndSeason] = useState(MOST_RECENT_SEASON)
   const [purge, setPurge] = useState(false)
   const [status, setStatus] = useState('ready') // ready | running | success | error
   const [message, setMessage] = useState('')
@@ -22,9 +25,9 @@ export default function AdminPage() {
       setMessage('VITE_BACKFILL_API_URL is not configured yet.')
       return
     }
-    if (startYear > endYear) {
+    if (startSeason >= endSeason) {
       setStatus('error')
-      setMessage('Start year must be before end year.')
+      setMessage('Start season must be before end season.')
       return
     }
 
@@ -35,8 +38,8 @@ export default function AdminPage() {
       const session = await fetchAuthSession()
       const idToken = session.tokens?.idToken?.toString()
 
-      const years = []
-      for (let y = startYear; y <= endYear; y++) years.push(y)
+      const seasons = []
+      for (let s = startSeason; s <= endSeason; s++) seasons.push(s)
 
       const res = await fetch(BACKFILL_API_URL, {
         method: 'POST',
@@ -44,7 +47,7 @@ export default function AdminPage() {
           'Content-Type': 'application/json',
           Authorization: idToken,
         },
-        body: JSON.stringify({ years, purge }),
+        body: JSON.stringify({ seasons, purge }),
       })
 
       const body = await res.json()
@@ -74,19 +77,19 @@ export default function AdminPage() {
 
         <div className="admin-form-row">
           <label>
-            Start Year
-            <select value={startYear} onChange={(e) => setStartYear(Number(e.target.value))}>
-              {YEAR_OPTIONS.map((y) => (
-                <option key={y} value={y}>{y}</option>
+            Start Season
+            <select value={startSeason} onChange={(e) => setStartSeason(Number(e.target.value))}>
+              {SEASON_OPTIONS.map((s) => (
+                <option key={s} value={s}>{s}</option>
               ))}
             </select>
           </label>
 
           <label>
-            End Year
-            <select value={endYear} onChange={(e) => setEndYear(Number(e.target.value))}>
-              {YEAR_OPTIONS.map((y) => (
-                <option key={y} value={y}>{y}</option>
+            End Season
+            <select value={endSeason} onChange={(e) => setEndSeason(Number(e.target.value))}>
+              {SEASON_OPTIONS.map((s) => (
+                <option key={s} value={s}>{s}</option>
               ))}
             </select>
           </label>
