@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Link, Navigate } from 'react-router-dom'
 import { useIsAdmin } from './auth/useAdmin'
 import DraftBoardPage from './pages/DraftBoardPage'
 import AdminPage from './pages/AdminPage'
+import TrustDeviceBanner from './components/TrustDeviceBanner'
 import './App.css'
 
 function AdminRoute() {
@@ -19,6 +20,8 @@ function AppShell({ signOut, user }) {
 
   return (
     <BrowserRouter>
+      <TrustDeviceBanner />
+
       <header className="app-header">
         <h1>Fantasy Football Manager</h1>
         <nav>
