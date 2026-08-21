@@ -15,7 +15,6 @@ const BACKFILL_API_URL = import.meta.env.VITE_BACKFILL_API_URL
 export default function AdminPage() {
   const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 5)
   const [endSeason, setEndSeason] = useState(MOST_RECENT_SEASON)
-  const [purge, setPurge] = useState(false)
   const [status, setStatus] = useState('ready') // ready | running | success | error
   const [message, setMessage] = useState('')
 
@@ -47,7 +46,7 @@ export default function AdminPage() {
           'Content-Type': 'application/json',
           Authorization: idToken,
         },
-        body: JSON.stringify({ seasons, purge }),
+        body: JSON.stringify({ seasons }),
       })
 
       const body = await res.json()
@@ -72,7 +71,8 @@ export default function AdminPage() {
         <h3>Bronze Layer Backfill</h3>
         <p className="admin-panel-description">
           Pulls rosters, weekly stats, depth charts, draft picks, and injuries
-          from nflreadpy and writes them to the S3 bronze layer.
+          from nflreadpy and writes them to the S3 bronze layer. Every run
+          purges existing data older than the current season before re-pulling.
         </p>
 
         <div className="admin-form-row">
@@ -94,11 +94,6 @@ export default function AdminPage() {
             </select>
           </label>
         </div>
-
-        <label className="admin-checkbox-row">
-          <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-          Purge existing partitions before re-pulling
-        </label>
 
         <button onClick={runBackfill} disabled={status === 'running'}>
           {status === 'running' ? 'Running…' : 'Run Backfill'}

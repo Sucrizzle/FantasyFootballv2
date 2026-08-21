@@ -32,14 +32,18 @@ This function handles three things, dispatched inside one handler:
 
 Expected API Gateway (Lambda proxy) event body for POST:
     {
-        "seasons": [2021, 2022, 2023, 2024, 2025],
-        "purge": false
+        "seasons": [2021, 2022, 2023, 2024, 2025]
     }
 
 `seasons` is capped at 15 and cannot include the current year (that
 season isn't complete yet) - validated here independently of the admin
 panel's own year-picker limits, since this endpoint could be called
 directly.
+
+Every run unconditionally purges every existing bronze partition older
+than the current season, across all datasets, before re-pulling whatever
+`seasons` was requested - there is no way to opt out. It's a full
+historical reset every time, not a per-request cleanup.
 
 Auth: API Gateway's Cognito authorizer confirms identity before invoking
 this function. This function additionally checks the `cognito:groups`
@@ -57,8 +61,8 @@ Deploy notes (console-first, see chat):
     - Runtime: Python 3.12+, needs nflreadpy + polars + boto3 in a layer
       or deployment package (boto3 is included in the base runtime, the
       other two are not).
-    - Execution role: needs s3:PutObject (and s3:ListBucket / s3:DeleteObject
-      if `purge` is used) scoped to bronze/* on the bucket below, PLUS
+    - Execution role: needs s3:PutObject, s3:ListBucket, s3:DeleteObject
+      (every run purges) scoped to bronze/* on the bucket below, PLUS
       lambda:InvokeFunction scoped to this function's own ARN (for the
       self-invoke), PLUS dynamodb:PutItem/UpdateItem/GetItem scoped to the
       jobs table ARN - NOT the "fantasy-football-pipeline" IAM
@@ -66,9 +70,11 @@ Deploy notes (console-first, see chat):
     - Set the BUCKET_NAME and JOBS_TABLE_NAME environment variables on the
       function - these are what differ between the dev and prod deploys of
       this same code.
-    - DynamoDB table: partition key `job_id` (String). Enable TTL on the
-      `expires_at` attribute so old job records clean themselves up
-      automatically instead of accumulating forever.
+    - DynamoDB table: partition key `job_id` (String). No TTL - job records
+      are kept indefinitely as an audit trail of every backfill run; the
+      admin panel is expected to pick the most recent record when surfacing
+      "last refresh" status rather than relying on a single current-status
+      pointer.
     - API Gateway routes, both with the Cognito JWT authorizer attached,
       both Lambda proxy integration, both pointing at this function:
         POST /admin/bronze-backfill
@@ -85,6 +91,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -101,7 +108,6 @@ BUCKET_NAME = os.environ["BUCKET_NAME"]
 JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
 ADMIN_GROUP = "admin"
 MAX_SEASONS = 15
-JOB_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days - matches the DynamoDB TTL attribute below
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -150,7 +156,7 @@ def _is_admin(event: dict) -> bool:
     return ADMIN_GROUP in groups.split(",")
 
 
-def _create_job(job_id: str, seasons: list[int], purge: bool) -> None:
+def _create_job(job_id: str, seasons: list[int]) -> None:
     now = int(time.time())
     jobs_table.put_item(Item={
         "job_id": job_id,
@@ -159,10 +165,8 @@ def _create_job(job_id: str, seasons: list[int], purge: bool) -> None:
         "written": [],
         "errors": [],
         "seasons": seasons,
-        "purge": purge,
         "created_at": now,
         "updated_at": now,
-        "expires_at": now + JOB_TTL_SECONDS,
     })
 
 
@@ -188,11 +192,17 @@ def _get_job(job_id: str) -> dict | None:
     return jobs_table.get_item(Key={"job_id": job_id}).get("Item")
 
 
-def _purge_partition(dataset: str, season: int) -> None:
-    prefix = f"bronze/{dataset}/season={season}/"
+def _purge_dataset_before_current_season(dataset: str) -> None:
+    """Deletes every existing partition for `dataset` older than the current
+    season - independent of which seasons this request is re-pulling, since
+    purge is meant as a full historical reset, not a per-request cleanup."""
+    current_year = datetime.now().year
+    prefix = f"bronze/{dataset}/"
     resp = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=prefix)
     for obj in resp.get("Contents", []):
-        s3.delete_object(Bucket=BUCKET_NAME, Key=obj["Key"])
+        match = re.search(r"season=(\d+)/", obj["Key"])
+        if match and int(match.group(1)) < current_year:
+            s3.delete_object(Bucket=BUCKET_NAME, Key=obj["Key"])
 
 
 def _write_partition(df: pl.DataFrame, dataset: str, season: int) -> str | None:
@@ -209,16 +219,21 @@ def _write_partition(df: pl.DataFrame, dataset: str, season: int) -> str | None:
     return key
 
 
-def _run_bronze_backfill(seasons: list[int], purge: bool) -> dict:
+def _run_bronze_backfill(seasons: list[int]) -> dict:
     """The actual work - only runs inside the detached async worker invocation."""
     written = []
     errors = []
 
+    for dataset in DATASETS:
+        try:
+            _purge_dataset_before_current_season(dataset)
+        except Exception as e:
+            log.warning(f"  Failed to purge {dataset}: {e}")
+            errors.append(f"purge {dataset}: {e}")
+
     for dataset, loader in DATASETS.items():
         for season in seasons:
             try:
-                if purge:
-                    _purge_partition(dataset, season)
                 df = loader(season)
                 key = _write_partition(df, dataset, season)
                 if key:
@@ -237,30 +252,29 @@ def _run_bronze_backfill(seasons: list[int], purge: bool) -> dict:
     return result
 
 
-def _validate_request(body: dict) -> tuple[list[int] | None, bool, dict | None]:
-    """Returns (seasons, purge, error_response). error_response is None if valid."""
+def _validate_request(body: dict) -> tuple[list[int] | None, dict | None]:
+    """Returns (seasons, error_response). error_response is None if valid."""
     seasons = body.get("seasons")
-    purge = bool(body.get("purge", False))
 
     if not seasons or not isinstance(seasons, list):
-        return None, purge, _response(400, {"error": "`seasons` must be a non-empty list of ints."})
+        return None, _response(400, {"error": "`seasons` must be a non-empty list of ints."})
 
     if len(seasons) > MAX_SEASONS:
-        return None, purge, _response(400, {"error": f"`seasons` cannot span more than {MAX_SEASONS} years."})
+        return None, _response(400, {"error": f"`seasons` cannot span more than {MAX_SEASONS} years."})
 
     current_year = datetime.now().year
     if any(season >= current_year for season in seasons):
-        return None, purge, _response(400, {
+        return None, _response(400, {
             "error": f"`seasons` cannot include {current_year} or later - that season isn't complete yet.",
         })
 
-    return seasons, purge, None
+    return seasons, None
 
 
 def _handle_worker(event: dict) -> None:
     job_id = event["jobId"]
     try:
-        result = _run_bronze_backfill(event["seasons"], event["purge"])
+        result = _run_bronze_backfill(event["seasons"])
         status = "failed" if result["errors"] else "success"
         _finish_job(job_id, status, result)
     except Exception as e:
@@ -288,17 +302,17 @@ def _handle_start_backfill(event: dict, context) -> dict:
     except json.JSONDecodeError:
         return _response(400, {"error": "Invalid JSON body."})
 
-    seasons, purge, error_response = _validate_request(body)
+    seasons, error_response = _validate_request(body)
     if error_response:
         return error_response
 
     job_id = str(uuid.uuid4())
-    _create_job(job_id, seasons, purge)
+    _create_job(job_id, seasons)
 
     lambda_client.invoke(
         FunctionName=context.invoked_function_arn,
         InvocationType="Event",
-        Payload=json.dumps({"_worker": True, "jobId": job_id, "seasons": seasons, "purge": purge}),
+        Payload=json.dumps({"_worker": True, "jobId": job_id, "seasons": seasons}),
     )
 
     return _response(202, {
