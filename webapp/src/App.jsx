@@ -1,9 +1,11 @@
 import { Authenticator } from '@aws-amplify/ui-react'
 import '@aws-amplify/ui-react/styles.css'
-import { BrowserRouter, Routes, Route, Link, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useIsAdmin } from './auth/useAdmin'
 import DraftBoardPage from './pages/DraftBoardPage'
 import AdminPage from './pages/AdminPage'
+import TrustDeviceBanner from './components/TrustDeviceBanner'
+import Sidebar from './components/Sidebar'
 import './App.css'
 
 function AdminRoute() {
@@ -19,24 +21,20 @@ function AppShell({ signOut, user }) {
 
   return (
     <BrowserRouter>
-      <header className="app-header">
-        <h1>Fantasy Football Manager</h1>
-        <nav>
-          <Link to="/">Draft Board</Link>
-          {isAdmin && <Link to="/admin">Admin</Link>}
-        </nav>
-        <div className="app-header-user">
-          <span>{user?.username}</span>
-          <button onClick={signOut}>Sign out</button>
-        </div>
-      </header>
+      <div className="app-shell">
+        <Sidebar isAdmin={isAdmin} user={user} signOut={signOut} />
 
-      <main>
-        <Routes>
-          <Route path="/" element={<DraftBoardPage />} />
-          <Route path="/admin" element={<AdminRoute />} />
-        </Routes>
-      </main>
+        <div className="app-content">
+          <TrustDeviceBanner />
+
+          <main>
+            <Routes>
+              <Route path="/" element={<DraftBoardPage />} />
+              <Route path="/admin" element={<AdminRoute />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
     </BrowserRouter>
   )
 }
