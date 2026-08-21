@@ -1,7 +1,7 @@
 """
-BackfillLambda.py
+Backfill.py
 
-Lambda version of BronzeBackfill.py - pulls raw NFL data via nflreadpy and
+Pulls raw NFL data via nflreadpy and
 writes it as partitioned parquet to the S3 bronze layer, triggered from the
 web app's admin panel via API Gateway. Job status is tracked in DynamoDB so
 the admin panel can poll for real success/failure instead of just trusting
