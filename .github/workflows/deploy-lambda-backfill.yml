@@ -21,6 +21,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # TEMPORARY debug step - prints the actual OIDC token claims GitHub is
+      # sending, so we can compare byte-for-byte against the trust policy's
+      # expected `sub`/`aud` instead of continuing to guess why AssumeRole is
+      # being denied despite everything on the AWS side checking out. Safe to
+      # log - these claims are the same ones already unencrypted in the trust
+      # policy condition. Remove this step once the real issue is found.
+      - name: Debug OIDC token claims
+        run: |
+          JWT=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          PAYLOAD=$(echo "$JWT" | cut -d '.' -f2 | tr '_-' '/+')
+          case $(( ${#PAYLOAD} % 4 )) in
+            2) PAYLOAD="${PAYLOAD}==" ;;
+            3) PAYLOAD="${PAYLOAD}=" ;;
+          esac
+          echo "$PAYLOAD" | base64 -d | jq .
+
       # Separate IAM roles per environment, each scoped only to its own
       # function's ARN - a compromised/misconfigured dev deploy can't touch
       # the prod Lambda, and vice versa.
