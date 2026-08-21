@@ -31,8 +31,8 @@ jobs:
 
       - name: Package function code
         run: |
-          cd Backfill
-          zip function.zip BackfillLambda.py
+          cd Lambda\Backfill
+          zip function.zip Backfill.py
 
       - name: Deploy to Lambda
         run: |
