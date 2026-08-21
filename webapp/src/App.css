@@ -1,27 +1,17 @@
-.app-header {
+.app-shell {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid #444;
+  min-height: 100vh;
 }
 
-.app-header h1 {
-  font-size: 1.25rem;
-  margin: 0;
+.app-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.app-header nav {
-  display: flex;
-  gap: 1rem;
-}
-
-.app-header-user {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-size: 0.9rem;
+.app-content main {
+  flex: 1;
 }
 
 .counter {
