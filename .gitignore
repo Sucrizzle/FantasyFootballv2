@@ -1,5 +1,8 @@
 # Project specific
+.claude/
 docs/
+layer/
+backfill-layer.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

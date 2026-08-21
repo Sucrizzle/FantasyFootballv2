@@ -1,0 +1,45 @@
+name: Deploy Backfill Lambda
+
+on:
+  push:
+    branches:
+      - development
+      - main
+    paths:
+      - "Backfill/BackfillLambda.py"
+      - ".github/workflows/deploy-backfill-lambda.yml"
+
+permissions:
+  id-token: write # required for OIDC federation with AWS - no stored access keys
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-backfill' || 'fantasy-football-backfill-dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Separate IAM roles per environment, each scoped only to its own
+      # function's ARN - a compromised/misconfigured dev deploy can't touch
+      # the prod Lambda, and vice versa.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ github.ref_name == 'main' && secrets.AWS_DEPLOY_ROLE_ARN_PROD || secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: ca-central-1
+
+      - name: Package function code
+        run: |
+          cd Backfill
+          zip function.zip BackfillLambda.py
+
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://Backfill/function.zip
+
+      - name: Wait for update to finish
+        run: |
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
