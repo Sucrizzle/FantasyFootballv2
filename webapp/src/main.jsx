@@ -1,7 +1,12 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Amplify } from 'aws-amplify'
 import './index.css'
 import App from './App.jsx'
+import amplify_config from './amplifyconfig.json'
+
+// Call Amplify config
+Amplify.configure(amplify_config);
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
