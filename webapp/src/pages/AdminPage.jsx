@@ -39,6 +39,7 @@ export default function AdminPage() {
     try {
       const session = await fetchAuthSession()
       const idToken = session.tokens?.idToken?.toString()
+      console.log('DEBUG ID TOKEN:', idToken) // TEMPORARY - remove after debugging admin claim
 
       const seasons = []
       for (let s = startSeason; s <= endSeason; s++) seasons.push(s)
