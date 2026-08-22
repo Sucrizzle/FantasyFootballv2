@@ -109,8 +109,12 @@ JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
 ADMIN_GROUP = "admin"
 MAX_SEASONS = 15
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# logging.basicConfig() is a no-op here - the Lambda runtime already attaches
+# its own handler to the root logger before this module runs, and its
+# default level (WARNING) silently drops every log.info() call unless this
+# logger's own level is set explicitly.
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 s3 = boto3.client("s3")
 lambda_client = boto3.client("lambda")
@@ -142,10 +146,13 @@ def _is_admin(event: dict) -> bool:
     # authorizer puts them directly under "authorizer" - support both.
     claims = authorizer.get("jwt", {}).get("claims", {}) or authorizer.get("claims", {})
     groups = claims.get("cognito:groups", "")
-    # TEMPORARY debug log - remove once the real claim shape from API
+    # TEMPORARY debug print - remove once the real claim shape from API
     # Gateway's JWT authorizer is confirmed (our earlier console testing
-    # used a simulated event, which may not match the real shape).
-    log.info(f"DEBUG authorizer claims: {json.dumps(claims, default=str)}")
+    # used a simulated event, which may not match the real shape). Using
+    # print() instead of log.info() here specifically because it bypasses
+    # logging entirely - guaranteed visible regardless of logger config.
+    print(f"DEBUG authorizer claims: {json.dumps(claims, default=str)}")
+    print(f"DEBUG full authorizer block: {json.dumps(authorizer, default=str)}")
 
     if isinstance(groups, list):
         return ADMIN_GROUP in groups
