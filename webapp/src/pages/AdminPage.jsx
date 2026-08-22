@@ -8,9 +8,12 @@ const MOST_RECENT_SEASON = CURRENT_YEAR - 1
 // never selectable since its season isn't complete yet.
 const SEASON_OPTIONS = Array.from({ length: 15 }, (_, i) => MOST_RECENT_SEASON - i)
 
-// Set VITE_BACKFILL_API_URL in webapp/.env.local once the API Gateway
-// route is created (see docs comment in BackfillLambda.py).
-const BACKFILL_API_URL = import.meta.env.VITE_BACKFILL_API_URL
+// Set VITE_API_BASE_URL in webapp/.env.local once the API Gateway is
+// created - this is the shared API backing the whole app, not just this
+// page, so routes are built on top of it rather than each page having its
+// own base URL variable.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
+const BACKFILL_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/bronze-backfill` : null
 
 export default function AdminPage() {
   const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 5)
@@ -21,7 +24,7 @@ export default function AdminPage() {
   async function runBackfill() {
     if (!BACKFILL_API_URL) {
       setStatus('error')
-      setMessage('VITE_BACKFILL_API_URL is not configured yet.')
+      setMessage('VITE_API_BASE_URL is not configured yet.')
       return
     }
     if (startSeason >= endSeason) {
