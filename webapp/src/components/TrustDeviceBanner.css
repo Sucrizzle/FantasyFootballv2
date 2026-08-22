@@ -1,0 +1,25 @@
+.trust-device-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: #2a2a2a;
+  border-bottom: 1px solid #444;
+  font-size: 0.85rem;
+}
+
+.trust-device-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.trust-device-dismiss {
+  background: transparent;
+  border: 1px solid #666;
+}
+
+.trust-device-error {
+  color: #f44336;
+  margin: 0;
+}

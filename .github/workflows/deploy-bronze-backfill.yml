@@ -1,0 +1,45 @@
+name: Deploy Bronze Backfill
+
+on:
+  push:
+    branches:
+      - development
+      - main
+    paths:
+      - "Lambda/BronzeBackfill/BronzeBackfill.py"
+      - ".github/workflows/deploy-bronze-backfill.yml"
+
+permissions:
+  id-token: write # required for OIDC federation with AWS - no stored access keys
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-bronze-backfill' || 'fantasy-football-bronze-backfill-dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Separate IAM roles per environment, tag-scoped (not name-scoped) -
+      # so this deploy role/policy pair didn't need any changes when the
+      # Lambda function itself was renamed, only FUNCTION_NAME below did.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ github.ref_name == 'main' && secrets.AWS_DEPLOY_ROLE_ARN_PROD || secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          aws-region: ca-central-1
+
+      - name: Package function code
+        run: |
+          cd Lambda/BronzeBackfill
+          zip function.zip BronzeBackfill.py
+
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://Lambda/BronzeBackfill/function.zip
+
+      - name: Wait for update to finish
+        run: |
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
