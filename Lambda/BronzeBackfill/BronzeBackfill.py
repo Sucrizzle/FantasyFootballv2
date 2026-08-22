@@ -142,6 +142,10 @@ def _is_admin(event: dict) -> bool:
     # authorizer puts them directly under "authorizer" - support both.
     claims = authorizer.get("jwt", {}).get("claims", {}) or authorizer.get("claims", {})
     groups = claims.get("cognito:groups", "")
+    # TEMPORARY debug log - remove once the real claim shape from API
+    # Gateway's JWT authorizer is confirmed (our earlier console testing
+    # used a simulated event, which may not match the real shape).
+    log.info(f"DEBUG authorizer claims: {json.dumps(claims, default=str)}")
 
     if isinstance(groups, list):
         return ADMIN_GROUP in groups
