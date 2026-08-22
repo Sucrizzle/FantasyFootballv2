@@ -146,24 +146,19 @@ def _is_admin(event: dict) -> bool:
     # authorizer puts them directly under "authorizer" - support both.
     claims = authorizer.get("jwt", {}).get("claims", {}) or authorizer.get("claims", {})
     groups = claims.get("cognito:groups", "")
-    # TEMPORARY debug print - remove once the real claim shape from API
-    # Gateway's JWT authorizer is confirmed (our earlier console testing
-    # used a simulated event, which may not match the real shape). Using
-    # print() instead of log.info() here specifically because it bypasses
-    # logging entirely - guaranteed visible regardless of logger config.
-    print(f"DEBUG authorizer claims: {json.dumps(claims, default=str)}")
-    print(f"DEBUG full authorizer block: {json.dumps(authorizer, default=str)}")
 
     if isinstance(groups, list):
         return ADMIN_GROUP in groups
-    if groups.startswith("["):
-        # HTTP API JSON-encodes array claims into a string, e.g. '["admin"]'.
-        try:
-            return ADMIN_GROUP in json.loads(groups)
-        except json.JSONDecodeError:
-            pass
-    # REST API's Cognito authorizer flattens the claim to a comma-separated
-    # string instead.
+    if groups.startswith("[") and groups.endswith("]"):
+        # HTTP API's JWT authorizer serializes array claims as a bracket-
+        # wrapped, comma-separated list WITHOUT JSON quoting - e.g. "[admin]"
+        # or "[admin,user]" - NOT valid JSON (json.loads on this raises
+        # JSONDecodeError). Confirmed via direct CloudWatch output from a
+        # real invocation; not documented by AWS anywhere we found.
+        members = [g.strip() for g in groups[1:-1].split(",") if g.strip()]
+        return ADMIN_GROUP in members
+    # REST API's Cognito authorizer flattens the claim to a plain
+    # comma-separated string instead (no brackets at all).
     return ADMIN_GROUP in groups.split(",")
 
 
