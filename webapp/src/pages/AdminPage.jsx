@@ -14,12 +14,16 @@ const SEASON_OPTIONS = Array.from({ length: 15 }, (_, i) => MOST_RECENT_SEASON -
 // own base URL variable.
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const BACKFILL_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/bronze-backfill` : null
+const SILVER_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/silver` : null
 
 export default function AdminPage() {
   const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 5)
   const [endSeason, setEndSeason] = useState(MOST_RECENT_SEASON)
   const [status, setStatus] = useState('ready') // ready | running | success | error
   const [message, setMessage] = useState('')
+
+  const [silverStatus, setSilverStatus] = useState('ready') // ready | running | success | error
+  const [silverMessage, setSilverMessage] = useState('')
 
   async function runBackfill() {
     if (!BACKFILL_API_URL) {
@@ -39,7 +43,6 @@ export default function AdminPage() {
     try {
       const session = await fetchAuthSession()
       const idToken = session.tokens?.idToken?.toString()
-      console.log('DEBUG ID TOKEN:', idToken) // TEMPORARY - remove after debugging admin claim
 
       const seasons = []
       for (let s = startSeason; s <= endSeason; s++) seasons.push(s)
@@ -64,6 +67,45 @@ export default function AdminPage() {
     } catch (err) {
       setStatus('error')
       setMessage(err.message)
+    }
+  }
+
+  // Interim manual trigger while silver's design is still being sorted out
+  // (rosters cleansing today, more sources later) - not part of the
+  // eventual consolidated "Run Data Pipeline" flow yet.
+  async function runSilver() {
+    if (!SILVER_API_URL) {
+      setSilverStatus('error')
+      setSilverMessage('VITE_API_BASE_URL is not configured yet.')
+      return
+    }
+
+    setSilverStatus('running')
+    setSilverMessage('')
+
+    try {
+      const session = await fetchAuthSession()
+      const idToken = session.tokens?.idToken?.toString()
+
+      const res = await fetch(SILVER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: idToken,
+        },
+      })
+
+      const body = await res.json()
+
+      if (!res.ok) {
+        throw new Error(body.error || `Request failed with status ${res.status}`)
+      }
+
+      setSilverStatus('success')
+      setSilverMessage(body.message || 'Silver cleansing complete.')
+    } catch (err) {
+      setSilverStatus('error')
+      setSilverMessage(err.message)
     }
   }
 
@@ -105,6 +147,23 @@ export default function AdminPage() {
 
         {status === 'success' && <p className="admin-status admin-status-success">{message}</p>}
         {status === 'error' && <p className="admin-status admin-status-error">{message}</p>}
+      </section>
+
+      <section className="admin-panel">
+        <h3>Silver Layer Cleansing</h3>
+        <p className="admin-panel-description">
+          Interim manual trigger while silver's design is still being sorted
+          out - runs rosters cleansing against whatever's currently in
+          bronze. Will eventually run automatically after a successful
+          backfill instead of needing its own button.
+        </p>
+
+        <button onClick={runSilver} disabled={silverStatus === 'running'}>
+          {silverStatus === 'running' ? 'Running…' : 'Run Silver'}
+        </button>
+
+        {silverStatus === 'success' && <p className="admin-status admin-status-success">{silverMessage}</p>}
+        {silverStatus === 'error' && <p className="admin-status admin-status-error">{silverMessage}</p>}
       </section>
     </div>
   )

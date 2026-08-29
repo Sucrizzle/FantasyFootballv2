@@ -51,6 +51,7 @@ Deploy notes (console-first, matching BronzeBackfill.py's pattern):
       didn't have to account for.
 """
 
+import json
 import logging
 import os
 import time
@@ -71,6 +72,7 @@ os.environ.setdefault("HOME", "/tmp")
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
 JOB_TYPE = "silver_rosters"
+ADMIN_GROUP = "admin"
 
 # logging.basicConfig() is a no-op under the Lambda runtime - see
 # BronzeBackfill.py for why. Set the logger's level explicitly instead.
@@ -118,6 +120,31 @@ ROSTERS_QUERY = """
 """
 
 
+def _response(status_code: int, body: dict) -> dict:
+    return {
+        "statusCode": status_code,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(body, default=str),
+    }
+
+
+def _is_admin(event: dict) -> bool:
+    # Same claim-parsing logic as BronzeBackfill.py - see that file for why
+    # this specific shape (HTTP API's JWT authorizer serializes array claims
+    # as a bracket-wrapped, comma-separated, NON-json-quoted string like
+    # "[admin]", not valid JSON).
+    authorizer = event.get("requestContext", {}).get("authorizer", {})
+    claims = authorizer.get("jwt", {}).get("claims", {}) or authorizer.get("claims", {})
+    groups = claims.get("cognito:groups", "")
+
+    if isinstance(groups, list):
+        return ADMIN_GROUP in groups
+    if groups.startswith("[") and groups.endswith("]"):
+        members = [g.strip() for g in groups[1:-1].split(",") if g.strip()]
+        return ADMIN_GROUP in members
+    return ADMIN_GROUP in groups.split(",")
+
+
 def _create_job(job_id: str) -> None:
     now = int(time.time())
     jobs_table.put_item(Item={
@@ -151,6 +178,9 @@ def _clean_rosters(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def handler(event, context):
+    if not _is_admin(event):
+        return _response(403, {"error": "Admin access required."})
+
     job_id = str(uuid.uuid4())
     _create_job(job_id)
 
@@ -174,7 +204,7 @@ def handler(event, context):
         # forever, since nothing else ever updates the record.
         log.exception("Silver rosters cleansing crashed")
         _finish_job(job_id, "failed", str(e))
-        return {"statusCode": 500, "body": f"jobId={job_id}, error={e}"}
+        return _response(500, {"jobId": job_id, "error": str(e)})
 
     _finish_job(job_id, "success", "Silver rosters cleaned successfully.")
-    return {"statusCode": 200, "body": f"jobId={job_id}, Silver rosters cleaned successfully."}
+    return _response(200, {"jobId": job_id, "message": "Silver rosters cleaned successfully."})
