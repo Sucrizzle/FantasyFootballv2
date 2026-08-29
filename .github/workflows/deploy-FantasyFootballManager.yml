@@ -41,7 +41,7 @@ jobs:
 
       - name: Upload Silver query files
         run: |
-          aws s3 cp Lambda/silver/queries/ \
+          aws s3 cp Lambda/Silver/queries/ \
             "s3://$MAPPINGS_BUCKET/silver/queries/" --recursive
 
       - name: Package function code
