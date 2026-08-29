@@ -126,6 +126,7 @@ DATASETS = {
     "depth_charts": lambda season: nfl.load_depth_charts(seasons=[season]),
     "draft_picks": lambda season: nfl.load_draft_picks(seasons=[season]),
     "injuries": lambda season: nfl.load_injuries(seasons=[season]),
+    "schedules": lambda season: nfl.load_schedules(seasons=[season]),
 }
 
 

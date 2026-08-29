@@ -89,7 +89,7 @@ ROSTERS_QUERY = """
         , r.jersey_number
         , r.status
         , r.full_name
-        , r.first_name
+        , r.football_name first_name
         , r.last_name
         , r.birth_date
         , r.height
@@ -102,7 +102,6 @@ ROSTERS_QUERY = """
         , r.headshot_url
         , r.week
         , r.game_type
-        , r.football_name
         , r.rookie_year
         , COALESCE(cm_dc.target, 'UDFA') as draft_club
         , r.draft_number
