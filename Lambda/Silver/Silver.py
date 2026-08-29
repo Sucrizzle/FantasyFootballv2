@@ -148,6 +148,11 @@ def handler(event, context):
 
     try:
         con = duckdb.connect()
+        # DuckDB needs a writable home directory to install/cache extensions
+        # like httpfs. Lambda's environment doesn't provide one (HOME is
+        # unset, filesystem is read-only outside /tmp) - point it at /tmp,
+        # the one writable location Lambda guarantees.
+        con.sql("SET home_directory='/tmp';")
         con.sql("INSTALL httpfs; LOAD httpfs;")
         # No PROVIDER needed here (unlike local DBeaver testing) - the
         # Lambda's own execution role credentials are picked up
