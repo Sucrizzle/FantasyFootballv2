@@ -92,8 +92,8 @@ BUCKET_NAME = os.environ["BUCKET_NAME"]
 JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
 JOB_TYPE = "silver"
 ADMIN_GROUP = "admin"
-MANIFEST_KEY = "silver-queries/manifest.json"
-QUERIES_PREFIX = "silver-queries/"
+MANIFEST_KEY = "Silver/queries/manifest.json"
+QUERIES_PREFIX = "Silver/queries/"
 
 # logging.basicConfig() is a no-op under the Lambda runtime - see
 # BronzeBackfill.py for why. Set the logger's level explicitly instead.
