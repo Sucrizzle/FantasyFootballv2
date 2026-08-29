@@ -1,8 +1,8 @@
 # Project specific
 .claude/
 docs/
-layer/
-backfill-layer.zip
+layer-*/
+*-layer.zip
 scratch-peek
 
 # Byte-compiled / optimized / DLL files

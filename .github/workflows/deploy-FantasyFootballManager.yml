@@ -6,7 +6,8 @@ on:
       - development
       - main
     paths:
-      - "Lambda/BronzeBackfill/BronzeBackfill.py"
+      - "Lambda/Bronze/BronzeBackfill.py"
+      - "Lambda/Silver/Silver.py"
       - "Datasets/Mappings/*.csv"
       - ".github/workflows/deploy-FantasyFootballManager.yml"
 
@@ -18,7 +19,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-bronze-backfill' || 'fantasy-football-bronze-backfill-dev' }}
+      BACKFILL_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-bronze-backfill' || 'fantasy-football-bronze-backfill-dev' }}
+      SILVER_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-silver' || 'fantasy-football-silver-dev' }}
       MAPPINGS_BUCKET: ${{ github.ref_name == 'main' && 'fantasy-football-808943963151-ca-central-1-an' || 'fantasy-football-dev-808943963151-ca-central-1-an' }}
     steps:
       - uses: actions/checkout@v4
@@ -31,22 +33,38 @@ jobs:
           role-to-assume: ${{ github.ref_name == 'main' && secrets.AWS_DEPLOY_ROLE_ARN_PROD || secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
           aws-region: ca-central-1
 
+      - name: Upload Mapping Files
+        run: |
+          aws s3 cp Datasets/Mappings/club_mapping.csv \
+            "s3://$MAPPINGS_BUCKET/mappings/club_mapping.csv"
+
       - name: Package function code
         run: |
-          cd Lambda/BronzeBackfill
+          cd Lambda/Bronze
           zip function.zip BronzeBackfill.py
 
       - name: Deploy to Lambda
         run: |
           aws lambda update-function-code \
-            --function-name "$FUNCTION_NAME" \
-            --zip-file fileb://Lambda/BronzeBackfill/function.zip
+            --function-name "$BACKFILL_FUNCTION_NAME" \
+            --zip-file fileb://Lambda/Bronze/function.zip
 
       - name: Wait for update to finish
         run: |
-          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+          aws lambda wait function-updated --function-name "$BACKFILL_FUNCTION_NAME"
 
-      - name: Upload Mapping Files
+      - name: Package Silver function code
         run: |
-          aws s3 cp Datasets/Mappings/club_mapping.csv \
-            "s3://$MAPPINGS_BUCKET/mappings/club_mapping.csv"
+          cd Lambda/Silver
+          zip function.zip Silver.py
+
+      - name: Deploy Silver to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name "$SILVER_FUNCTION_NAME" \
+            --zip-file fileb://Lambda/Silver/function.zip
+
+      - name: Wait for Silver update to finish
+        run: |
+          aws lambda wait function-updated --function-name "$SILVER_FUNCTION_NAME"
+
