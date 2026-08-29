@@ -1,4 +1,4 @@
-name: Deploy Bronze Backfill
+name: Deploy FantasyFootballManager
 
 on:
   push:
@@ -7,7 +7,8 @@ on:
       - main
     paths:
       - "Lambda/BronzeBackfill/BronzeBackfill.py"
-      - ".github/workflows/deploy-bronze-backfill.yml"
+      - "Datasets/Mappings/*.csv"
+      - ".github/workflows/deploy-FantasyFootballManager.yml"
 
 permissions:
   id-token: write # required for OIDC federation with AWS - no stored access keys
@@ -18,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-bronze-backfill' || 'fantasy-football-bronze-backfill-dev' }}
+      MAPPINGS_BUCKET: ${{ github.ref_name == 'main' && 'fantasy-football-808943963151-ca-central-1-an' || 'fantasy-football-dev-808943963151-ca-central-1-an' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,3 +45,8 @@ jobs:
       - name: Wait for update to finish
         run: |
           aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+
+      - name: Upload Mapping Files
+        run: |
+          aws s3 cp Datasets/Mappings/club_mapping.csv \
+            "s3://$MAPPINGS_BUCKET/mappings/club_mapping.csv"
