@@ -59,6 +59,15 @@ import uuid
 import boto3
 import duckdb
 
+# Lambda's environment doesn't set HOME at all. DuckDB's own extension
+# cache respects a SQL-level `SET home_directory`, but the `aws` extension
+# (auto-installed by `CREATE SECRET ... PROVIDER credential_chain`) checks
+# the OS-level HOME env var directly instead - setting it here, before
+# duckdb ever runs a query, covers both code paths. Must happen before any
+# duckdb.connect()/con.sql() call, so it's set at import time, not inside
+# the handler.
+os.environ.setdefault("HOME", "/tmp")
+
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
 JOB_TYPE = "silver_rosters"
