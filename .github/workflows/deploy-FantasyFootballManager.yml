@@ -8,6 +8,7 @@ on:
     paths:
       - "Lambda/Bronze/BronzeBackfill.py"
       - "Lambda/Silver/Silver.py"
+      - "Lambda/Silver/queries/*"
       - "Datasets/Mappings/*.csv"
       - ".github/workflows/deploy-FantasyFootballManager.yml"
 
@@ -37,6 +38,11 @@ jobs:
         run: |
           aws s3 cp Datasets/Mappings/club_mapping.csv \
             "s3://$MAPPINGS_BUCKET/mappings/club_mapping.csv"
+
+      - name: Upload Silver query files
+        run: |
+          aws s3 cp Lambda/Silver/queries/ \
+            "s3://$MAPPINGS_BUCKET/silver-queries/" --recursive
 
       - name: Package function code
         run: |

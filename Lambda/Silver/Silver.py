@@ -1,54 +1,73 @@
 """
 Silver.py
 
-Cleans bronze `rosters` data into a single, standardized silver parquet file
-via DuckDB (reads/writes S3 parquet directly, no download step). Pure
-technical cleansing per source, matching this project's medallion
-definition (see docs/project-summary.md): standardizes column values (team
+Generic silver-layer runner: reads a manifest describing which SQL queries
+to run and where to write their output, executes each one via DuckDB
+(reads/writes S3 parquet directly, no download step), and tracks status in
+DynamoDB. Adding a new silver transform (e.g. depth_charts) is just adding
+a new .sql file + a manifest entry - no code change or redeploy needed for
+that. Code changes are only needed for genuinely new *logic* (e.g. the
+depth_charts schedule-join derivation), not for new pass-through-style
+cleansing queries.
+
+Manifest and query files live in S3 (uploaded via the same CI/CD step that
+uploads the mapping CSVs - see Lambda/Silver/queries/ in the repo, and
+.github/workflows/deploy-FantasyFootballManager.yml), at:
+    s3://<bucket>/silver-queries/manifest.json
+    s3://<bucket>/silver-queries/<query_file>
+
+Manifest shape (see Lambda/Silver/queries/manifest.json for the real one):
+    [
+      {"name": "rosters", "query_file": "rosters.sql", "output_path": "silver/rosters/rosters.parquet"},
+      ...
+    ]
+
+Each query file is a plain SELECT (no COPY wrapper) - this runner wraps it
+in `COPY (<query>) TO '<output_path>' (FORMAT PARQUET)` itself, using the
+manifest's output_path. Query files use the same BUCKET_PLACEHOLDER
+convention as before for the bucket URI, substituted at runtime so the same
+files work unchanged across dev/prod.
+
+Matches this project's medallion definition (see docs/project-summary.md):
+pure technical cleansing per source - standardizes column values (team
 abbreviation normalization via a crosswalk file) but does NOT change grain
-(still one row per player per week, same as bronze) and does NOT join
-across sources - that grain change and cross-source joining is gold's job
-(building `dim_player` etc.), not silver's.
+and does NOT join across *different* bronze sources (only within one
+source's own schema-era differences, e.g. rosters/schedules each join
+against the mapping CSV, which is reference data, not another bronze
+source). Cross-source joins (e.g. depth_charts + schedules) are gold's job.
 
-Currently handles only `rosters` - other bronze sources get their own
-cleansing logic added here (or split into their own functions) as gold's
-needs surface them, matching the project's "start close to pass-through,
-add cleaning rules as real data issues are found" approach.
+One job record per invocation, covering all manifest entries - if one
+entry fails, the others still run (matching BronzeBackfill's per-dataset
+error isolation), and the job's `errors` list records which entries failed
+and why.
 
-Job status is tracked in the same shared DynamoDB jobs table BronzeBackfill
-uses (`job_type` distinguishes which pipeline stage a record belongs to),
-so the admin panel can eventually show real success/failure for this stage
-too, not just bronze. Unlike BronzeBackfill, this runs synchronously in a
-single invocation - there's no API Gateway route in front of this function
-(so no 30s integration timeout to dodge), so the async self-invoke/worker
-split bronze needs doesn't apply here.
-
-Not yet wired to a trigger - intended to eventually be invoked
+Not yet wired to a trigger beyond the interim "Run Silver" admin panel
+button (see AdminPage.jsx) - intended to eventually be invoked
 asynchronously by BronzeBackfill's worker on successful completion (see
-issue tracking the consolidated "Run Data Pipeline" admin button), so
-running the full bronze -> silver pipeline is a single admin action rather
-than a separate manual step. For now, invoke directly via the Lambda
-console Test tab or `aws lambda invoke` for manual runs.
+issue tracking the consolidated "Run Data Pipeline" admin button).
 
 Deploy notes (console-first, matching BronzeBackfill.py's pattern):
     - Runtime: Python 3.12 specifically - NOT 3.14 like BronzeBackfill uses.
       duckdb doesn't yet publish cp314 wheels (confirmed via chat), only up
       to 3.12 at time of writing. Needs the `duckdb` package in a layer -
-      separate from BronzeBackfill's nflreadpy+polars layer, built for
-      cp312 (manylinux2014_x86_64), since this Lambda doesn't need either
-      of bronze's dependencies.
+      separate from BronzeBackfill's nflreadpy+polars layer.
     - Execution role: needs s3:ListBucket (with s3:prefix condition
-      covering "bronze/*" and "mappings/*") on the bucket, PLUS
-      s3:GetObject on "bronze/*" and "mappings/*", PLUS s3:PutObject on
-      "silver/*", PLUS dynamodb:PutItem/UpdateItem scoped to the jobs
-      table ARN - NOT the "fantasy-football-pipeline" IAM user/profile
-      used for local dev.
+      covering "bronze/*", "mappings/*", and "silver-queries/*") on the
+      bucket, PLUS s3:GetObject on those same three prefixes, PLUS
+      s3:PutObject on "silver/*", PLUS dynamodb:PutItem/UpdateItem scoped
+      to the jobs table ARN.
     - Set the BUCKET_NAME and JOBS_TABLE_NAME environment variables -
       differ between dev and prod deploys of this same code.
-    - Timeout: DuckDB reading/joining/writing this volume of data should be
-      well under a minute, but give it real headroom (60-120s) since S3
-      round-trips through httpfs add latency the local DBeaver testing
-      didn't have to account for.
+    - Environment variables LC_ALL=C.UTF-8, LANG=C.UTF-8, PYTHONUTF8=1 -
+      Lambda's minimal environment has no locale set, which some code path
+      (DuckDB's own extension handling, or Python's encoding fallback)
+      consults directly, causing UnicodeDecodeError on non-ASCII data
+      (accented player names, etc.) if unset. Must be set as actual Lambda
+      environment variables, not in code - locale initialization happens
+      at process startup, before this module's code runs.
+    - Timeout: give real headroom (60-120s+) since this now runs multiple
+      queries per invocation, each with S3 round-trip latency through
+      httpfs that local DBeaver testing didn't have to account for.
 """
 
 import json
@@ -71,53 +90,18 @@ os.environ.setdefault("HOME", "/tmp")
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 JOBS_TABLE_NAME = os.environ["JOBS_TABLE_NAME"]
-JOB_TYPE = "silver_rosters"
+JOB_TYPE = "silver"
 ADMIN_GROUP = "admin"
+MANIFEST_KEY = "silver-queries/manifest.json"
+QUERIES_PREFIX = "silver-queries/"
 
 # logging.basicConfig() is a no-op under the Lambda runtime - see
 # BronzeBackfill.py for why. Set the logger's level explicitly instead.
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
+s3 = boto3.client("s3")
 jobs_table = boto3.resource("dynamodb").Table(JOBS_TABLE_NAME)
-
-ROSTERS_QUERY = """
-    COPY (
-        select
-          r.season
-        , cm_t.target as team
-        , r.position
-        , r.depth_chart_position
-        , r.jersey_number
-        , r.status
-        , r.full_name
-        , r.football_name first_name
-        , r.last_name
-        , r.birth_date
-        , r.height
-        , r.weight
-        , r.college
-        , r.gsis_id
-        , r.yahoo_id
-        , r.pff_id
-        , r.years_exp
-        , r.headshot_url
-        , r.week
-        , r.game_type
-        , r.rookie_year
-        , COALESCE(cm_dc.target, 'UDFA') as draft_club
-        , r.draft_number
-        from read_parquet(
-            'BUCKET_PLACEHOLDER/bronze/rosters/season=*/rosters.parquet',
-            union_by_name = true
-        ) r
-        left outer join read_csv('BUCKET_PLACEHOLDER/mappings/club_mapping.csv') cm_t
-          on r.team = cm_t.source
-        left outer join read_csv('BUCKET_PLACEHOLDER/mappings/club_mapping.csv') cm_dc
-          on r.draft_club = cm_dc.source
-        where r.season > 2015 -- 2015 is NULLs in key columns
-    ) TO 'BUCKET_PLACEHOLDER/silver/rosters/rosters.parquet' (FORMAT PARQUET);
-"""
 
 
 def _response(status_code: int, body: dict) -> dict:
@@ -151,30 +135,67 @@ def _create_job(job_id: str) -> None:
         "job_id": job_id,
         "job_type": JOB_TYPE,
         "status": "running",
-        "message": "Silver rosters cleansing running.",
+        "message": "Silver run in progress.",
+        "written": [],
+        "errors": [],
         "created_at": now,
         "updated_at": now,
     })
 
 
-def _finish_job(job_id: str, status: str, message: str) -> None:
+def _finish_job(job_id: str, status: str, written: list[str], errors: list[str]) -> None:
+    message = f"Silver run complete: {len(written)} output(s) written" + (
+        f", {len(errors)} error(s)." if errors else "."
+    )
     jobs_table.update_item(
         Key={"job_id": job_id},
-        UpdateExpression="SET #status = :status, #message = :message, updated_at = :updated_at",
+        UpdateExpression=(
+            "SET #status = :status, #message = :message, "
+            "written = :written, errors = :errors, updated_at = :updated_at"
+        ),
         ExpressionAttributeNames={"#status": "status", "#message": "message"},
         ExpressionAttributeValues={
             ":status": status,
             ":message": message,
+            ":written": written,
+            ":errors": errors,
             ":updated_at": int(time.time()),
         },
     )
 
 
-def _clean_rosters(con: duckdb.DuckDBPyConnection) -> None:
+def _load_manifest() -> list[dict]:
+    obj = s3.get_object(Bucket=BUCKET_NAME, Key=MANIFEST_KEY)
+    return json.loads(obj["Body"].read())
+
+
+def _load_query(query_file: str) -> str:
+    obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{QUERIES_PREFIX}{query_file}")
+    return obj["Body"].read().decode("utf-8")
+
+
+def _run_entry(con: duckdb.DuckDBPyConnection, entry: dict) -> None:
     bucket_uri = f"s3://{BUCKET_NAME}"
-    query = ROSTERS_QUERY.replace("BUCKET_PLACEHOLDER", bucket_uri)
-    con.sql(query)
-    log.info(f"Wrote silver/rosters/rosters.parquet to {bucket_uri}")
+    select_sql = _load_query(entry["query_file"]).replace("BUCKET_PLACEHOLDER", bucket_uri)
+    output_uri = f"{bucket_uri}/{entry['output_path']}"
+    con.sql(f"COPY ({select_sql}) TO '{output_uri}' (FORMAT PARQUET);")
+    log.info(f"[{entry['name']}] wrote {output_uri}")
+
+
+def _run_all(con: duckdb.DuckDBPyConnection) -> tuple[list[str], list[str]]:
+    written = []
+    errors = []
+
+    manifest = _load_manifest()
+    for entry in manifest:
+        try:
+            _run_entry(con, entry)
+            written.append(entry["name"])
+        except Exception as e:
+            log.warning(f"[{entry['name']}] failed: {e}")
+            errors.append(f"{entry['name']}: {e}")
+
+    return written, errors
 
 
 def handler(event, context):
@@ -198,13 +219,24 @@ def handler(event, context):
         # boto3 does elsewhere in this project.
         con.sql("CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION 'ca-central-1');")
 
-        _clean_rosters(con)
+        written, errors = _run_all(con)
     except Exception as e:
-        # Without this, a crash here would leave the job stuck on "running"
-        # forever, since nothing else ever updates the record.
-        log.exception("Silver rosters cleansing crashed")
-        _finish_job(job_id, "failed", str(e))
+        # Manifest/query-loading failures land here (never got to run any
+        # entry at all) - without this, the job would be stuck on "running"
+        # forever.
+        log.exception("Silver run crashed before any entry could run")
+        _finish_job(job_id, "failed", [], [str(e)])
         return _response(500, {"jobId": job_id, "error": str(e)})
 
-    _finish_job(job_id, "success", "Silver rosters cleaned successfully.")
-    return _response(200, {"jobId": job_id, "message": "Silver rosters cleaned successfully."})
+    # "success" even with partial errors, matching BronzeBackfill's
+    # per-dataset isolation - only fully "failed" if NOTHING wrote
+    # successfully. The `errors` list itself still surfaces partial
+    # failures either way.
+    status = "failed" if not written and errors else "success"
+    _finish_job(job_id, status, written, errors)
+
+    return _response(200 if status == "success" else 500, {
+        "jobId": job_id,
+        "written": written,
+        "errors": errors,
+    })
