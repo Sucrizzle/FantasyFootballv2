@@ -6,6 +6,10 @@ select
 , s.gameday
 , s.weekday
 , s.gametime
+, strftime(
+    timezone('UTC', timezone('America/New_York', CAST(gameday AS DATE) + CAST(gametime AS TIME))),
+	'%Y-%m-%dT%H:%M:%SZ'
+  ) AS game_datetime
 , cm_at.target as away_team
 , s.away_score
 , cm_ht.target as home_team
@@ -29,8 +33,8 @@ select
 , s.temp
 , s.wind
 , s.stadium
-from read_parquet('BUCKET_PLACEHOLDER/bronze/schedules/season=*/schedules.parquet', union_by_name = true) s
-left outer join read_csv('BUCKET_PLACEHOLDER/mappings/club_mapping.csv') cm_at
+from read_parquet('s3://fantasy-football-dev-808943963151-ca-central-1-an/bronze/schedules/season=*/schedules.parquet', union_by_name = true) s
+left outer join read_csv('s3://fantasy-football-dev-808943963151-ca-central-1-an/mappings/club_mapping.csv') cm_at
   on s.away_team = cm_at.source
-left outer join read_csv('BUCKET_PLACEHOLDER/mappings/club_mapping.csv') cm_ht
+left outer join read_csv('s3://fantasy-football-dev-808943963151-ca-central-1-an/mappings/club_mapping.csv') cm_ht
   on s.home_team = cm_ht.source
