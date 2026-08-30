@@ -213,6 +213,13 @@ def handler(event, context):
         # the one writable location Lambda guarantees.
         con.sql("SET home_directory='/tmp';")
         con.sql("INSTALL httpfs; LOAD httpfs;")
+        # icu provides real IANA timezone data (DST-aware conversions via
+        # the timezone() function) - needed by schedules.sql's
+        # gameday/gametime -> UTC game_datetime standardization, and by any
+        # future query needing the same. Loaded once here rather than
+        # per-query, since it's a connection-level concern, not something
+        # individual .sql files (plain SELECT statements) should repeat.
+        con.sql("INSTALL icu; LOAD icu;")
         # No PROVIDER needed here (unlike local DBeaver testing) - the
         # Lambda's own execution role credentials are picked up
         # automatically via the standard AWS credential chain, same as
