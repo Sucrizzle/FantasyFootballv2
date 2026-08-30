@@ -36,8 +36,8 @@ jobs:
 
       - name: Upload Mapping Files
         run: |
-          aws s3 cp Datasets/Mappings/club_mapping.csv \
-            "s3://$MAPPINGS_BUCKET/mappings/club_mapping.csv"
+          aws s3 cp Datasets/Mappings/*.csv \
+            "s3://$MAPPINGS_BUCKET/mappings/"
 
       - name: Upload Silver query files
         run: |
