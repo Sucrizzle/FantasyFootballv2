@@ -127,6 +127,11 @@ DATASETS = {
     "draft_picks": lambda season: nfl.load_draft_picks(seasons=[season]),
     "injuries": lambda season: nfl.load_injuries(seasons=[season]),
     "schedules": lambda season: nfl.load_schedules(seasons=[season]),
+    # Much larger than the other datasets (~45-50K rows/season, 300+
+    # columns, vs. a few thousand rows for everything else combined) - see
+    # docs/project-summary.md for the size/timeout implications flagged
+    # before this was actually needed.
+    "pbp": lambda season: nfl.load_pbp(seasons=[season]),
 }
 
 

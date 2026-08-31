@@ -1,4 +1,5 @@
 [
   { "name": "rosters", "query_file": "rosters.sql", "output_path": "silver/rosters/rosters.parquet" },
   { "name": "schedules", "query_file": "schedules.sql", "output_path": "silver/schedules/schedules.parquet" }
+  { "name": "depth_charts", "query_file": "depth_charts.sql", "output_path": "silver/depth_charts/depth_charts.parquet" }
 ]
