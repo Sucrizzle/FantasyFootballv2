@@ -10,8 +10,7 @@ select
 , dc.week
 , dc.game_type
 , COALESCE(dc.dt, s.game_datetime) as dc_datetime_utc
-, COALESCE(dc.pos_rank, CAST(dc.depth_team as INT)) as pos_rank
-, dc.jersey_number
+, COALESCE(dc.pos_rank, TRY_CAST(dc.depth_team as INT)) as pos_rank
 , COALESCE(dc.formation, fm.target) as formation
 , dc.pos_grp_id
 , dc.pos_grp
