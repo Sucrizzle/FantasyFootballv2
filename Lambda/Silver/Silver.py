@@ -41,10 +41,21 @@ entry fails, the others still run (matching BronzeBackfill's per-dataset
 error isolation), and the job's `errors` list records which entries failed
 and why.
 
-Not yet wired to a trigger beyond the interim "Run Silver" admin panel
-button (see AdminPage.jsx) - intended to eventually be invoked
-asynchronously by BronzeBackfill's worker on successful completion (see
-issue tracking the consolidated "Run Data Pipeline" admin button).
+Triggered via the interim "Run Silver" admin panel button (see
+AdminPage.jsx) - intended to eventually also be invoked asynchronously by
+BronzeBackfill's worker on successful completion (see issue tracking the
+consolidated "Run Data Pipeline" admin button).
+
+Async entry/worker split, same pattern and same reason as
+BronzeBackfill.py: API Gateway's HTTP API type has a hard, non-configurable
+~29-30s integration timeout, separate from whatever timeout is set on the
+Lambda itself. This was synchronous originally (fine when it only ran one
+fast query), but once it grew to 5 queries taking ~76s total, API Gateway
+started timing out the request before the Lambda finished - even though
+the Lambda kept running in the background and completed successfully. The
+entry path now validates + async self-invokes a worker + returns 202
+immediately; the worker (detached, no API Gateway involved) does the
+actual multi-query run and updates the same DynamoDB job record.
 
 Deploy notes (console-first, matching BronzeBackfill.py's pattern):
     - Runtime: Python 3.12 specifically - NOT 3.14 like BronzeBackfill uses.
@@ -55,9 +66,14 @@ Deploy notes (console-first, matching BronzeBackfill.py's pattern):
       covering "bronze/*", "mappings/*", and "silver-queries/*") on the
       bucket, PLUS s3:GetObject on those same three prefixes, PLUS
       s3:PutObject on "silver/*", PLUS dynamodb:PutItem/UpdateItem scoped
-      to the jobs table ARN.
+      to the jobs table ARN, PLUS lambda:InvokeFunction scoped to this
+      function's own ARN (for the self-invoke).
     - Set the BUCKET_NAME and JOBS_TABLE_NAME environment variables -
       differ between dev and prod deploys of this same code.
+    - API Gateway routes, both with the Cognito JWT authorizer attached,
+      both Lambda proxy integration, both pointing at this function:
+        POST /admin/silver
+        GET  /admin/silver/status/{jobId}
     - Environment variables LC_ALL=C.UTF-8, LANG=C.UTF-8, PYTHONUTF8=1 -
       Lambda's minimal environment has no locale set, which some code path
       (DuckDB's own extension handling, or Python's encoding fallback)
@@ -65,9 +81,12 @@ Deploy notes (console-first, matching BronzeBackfill.py's pattern):
       (accented player names, etc.) if unset. Must be set as actual Lambda
       environment variables, not in code - locale initialization happens
       at process startup, before this module's code runs.
-    - Timeout: give real headroom (60-120s+) since this now runs multiple
-      queries per invocation, each with S3 round-trip latency through
-      httpfs that local DBeaver testing didn't have to account for.
+    - Timeout: the entry path only validates and kicks off the async
+      invoke, so it returns in well under a second - a short timeout
+      (10-15s) is fine there. The worker invocation runs as a *separate*
+      Lambda execution with its own timeout, so it can be set generously
+      (several minutes) without affecting API Gateway's 30s integration
+      cap at all, since API Gateway never waits on it.
 """
 
 import json
@@ -101,6 +120,7 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
 s3 = boto3.client("s3")
+lambda_client = boto3.client("lambda")
 jobs_table = boto3.resource("dynamodb").Table(JOBS_TABLE_NAME)
 
 
@@ -164,6 +184,10 @@ def _finish_job(job_id: str, status: str, written: list[str], errors: list[str])
     )
 
 
+def _get_job(job_id: str) -> dict | None:
+    return jobs_table.get_item(Key={"job_id": job_id}).get("Item")
+
+
 def _load_manifest() -> list[dict]:
     obj = s3.get_object(Bucket=BUCKET_NAME, Key=MANIFEST_KEY)
     return json.loads(obj["Body"].read())
@@ -198,12 +222,8 @@ def _run_all(con: duckdb.DuckDBPyConnection) -> tuple[list[str], list[str]]:
     return written, errors
 
 
-def handler(event, context):
-    if not _is_admin(event):
-        return _response(403, {"error": "Admin access required."})
-
-    job_id = str(uuid.uuid4())
-    _create_job(job_id)
+def _handle_worker(event: dict) -> None:
+    job_id = event["jobId"]
 
     try:
         con = duckdb.connect()
@@ -233,7 +253,7 @@ def handler(event, context):
         # forever.
         log.exception("Silver run crashed before any entry could run")
         _finish_job(job_id, "failed", [], [str(e)])
-        return _response(500, {"jobId": job_id, "error": str(e)})
+        return
 
     # "success" even with partial errors, matching BronzeBackfill's
     # per-dataset isolation - only fully "failed" if NOTHING wrote
@@ -242,8 +262,45 @@ def handler(event, context):
     status = "failed" if not written and errors else "success"
     _finish_job(job_id, status, written, errors)
 
-    return _response(200 if status == "success" else 500, {
+
+def _handle_start_silver(context) -> dict:
+    job_id = str(uuid.uuid4())
+    _create_job(job_id)
+
+    lambda_client.invoke(
+        FunctionName=context.invoked_function_arn,
+        InvocationType="Event",
+        Payload=json.dumps({"_worker": True, "jobId": job_id}),
+    )
+
+    return _response(202, {
         "jobId": job_id,
-        "written": written,
-        "errors": errors,
+        "status": "running",
+        "message": "Silver run started.",
     })
+
+
+def _handle_status_check(event: dict) -> dict:
+    job_id = (event.get("pathParameters") or {}).get("jobId")
+    if not job_id:
+        return _response(400, {"error": "Missing jobId."})
+
+    job = _get_job(job_id)
+    if not job:
+        return _response(404, {"error": "Job not found."})
+
+    return _response(200, job)
+
+
+def handler(event, context):
+    if event.get("_worker"):
+        return _handle_worker(event)
+
+    if not _is_admin(event):
+        return _response(403, {"error": "Admin access required."})
+
+    method = event.get("requestContext", {}).get("http", {}).get("method", "POST")
+    if method == "GET":
+        return _handle_status_check(event)
+
+    return _handle_start_silver(context)
