@@ -9,5 +9,3 @@ group by
   s.season
 , s.week
 , s.game_type
-order by season, week
-;
