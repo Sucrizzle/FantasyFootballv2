@@ -25,6 +25,7 @@ const SEASON_OPTIONS = Array.from({ length: 15 }, (_, i) => MOST_RECENT_SEASON -
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const BACKFILL_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/bronze-backfill` : null
 const SILVER_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/silver` : null
+const GOLD_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/gold` : null
 
 export default function AdminPage() {
   const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 11)
@@ -34,6 +35,9 @@ export default function AdminPage() {
 
   const [silverStatus, setSilverStatus] = useState('ready') // ready | running | success | error
   const [silverMessage, setSilverMessage] = useState('')
+
+  const [goldStatus, setGoldStatus] = useState('ready') // ready | running | success | error
+  const [goldMessage, setGoldMessage] = useState('')
 
   async function runBackfill() {
     if (!BACKFILL_API_URL) {
@@ -119,6 +123,46 @@ export default function AdminPage() {
     }
   }
 
+  // Interim manual trigger, same pattern as runSilver - runs gold's
+  // manifest-driven queries against whatever's currently in silver. Will
+  // eventually run automatically after a successful silver run instead of
+  // needing its own button.
+  async function runGold() {
+    if (!GOLD_API_URL) {
+      setGoldStatus('error')
+      setGoldMessage('VITE_API_BASE_URL is not configured yet.')
+      return
+    }
+
+    setGoldStatus('running')
+    setGoldMessage('')
+
+    try {
+      const session = await fetchAuthSession()
+      const idToken = session.tokens?.idToken?.toString()
+
+      const res = await fetch(GOLD_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: idToken,
+        },
+      })
+
+      const body = await res.json()
+
+      if (!res.ok) {
+        throw new Error(body.error || `Request failed with status ${res.status}`)
+      }
+
+      setGoldStatus('success')
+      setGoldMessage(body.message || 'Gold run complete.')
+    } catch (err) {
+      setGoldStatus('error')
+      setGoldMessage(err.message)
+    }
+  }
+
   return (
     <div className="admin-page">
       <h2>Admin</h2>
@@ -174,6 +218,24 @@ export default function AdminPage() {
 
         {silverStatus === 'success' && <p className="admin-status admin-status-success">{silverMessage}</p>}
         {silverStatus === 'error' && <p className="admin-status admin-status-error">{silverMessage}</p>}
+      </section>
+
+      <section className="admin-panel">
+        <h3>Gold Layer</h3>
+        <p className="admin-panel-description">
+          Interim manual trigger, same pattern as Silver - runs gold's
+          manifest-driven queries (joins across silver sources, engineered
+          features) against whatever's currently in silver. Will eventually
+          run automatically after a successful silver run instead of
+          needing its own button.
+        </p>
+
+        <button onClick={runGold} disabled={goldStatus === 'running'}>
+          {goldStatus === 'running' ? 'Running…' : 'Run Gold'}
+        </button>
+
+        {goldStatus === 'success' && <p className="admin-status admin-status-success">{goldMessage}</p>}
+        {goldStatus === 'error' && <p className="admin-status admin-status-error">{goldMessage}</p>}
       </section>
     </div>
   )
