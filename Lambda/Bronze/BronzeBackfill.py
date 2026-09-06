@@ -137,7 +137,16 @@ DATASETS = {
     # docs/project-summary.md for the size/timeout implications flagged
     # before this was actually needed.
     "pbp": lambda season: nfl.load_pbp(seasons=[season]),
+    "team_stats": lambda season: nfl.load_team_stats(seasons=[season]),
 }
+
+# load_teams() takes no `season` arg at all - it's a static current snapshot
+# (conference/division/branding), not a per-season pull like everything in
+# DATASETS. Pulled once per run (see _run_bronze_backfill) and written to a
+# flat, non-partitioned key instead of bronze/teams/season=<year>/ - there's
+# only ever one current version, so a season partition would just mean
+# writing identical copies of the same ~32-row snapshot repeatedly.
+TEAMS_KEY = "bronze/teams/teams.parquet"
 
 
 def _response(status_code: int, body: dict) -> dict:
@@ -240,6 +249,19 @@ def _write_partition(df: pl.DataFrame, dataset: str, season: int) -> str | None:
     return key
 
 
+def _write_teams(df: pl.DataFrame) -> str | None:
+    if df is None or df.is_empty():
+        log.warning("  No data for teams, skipping.")
+        return None
+
+    buffer = io.BytesIO()
+    df.write_parquet(buffer)
+    buffer.seek(0)
+    s3.put_object(Bucket=BUCKET_NAME, Key=TEAMS_KEY, Body=buffer.getvalue())
+    log.info(f"  Wrote {df.height:,} rows -> s3://{BUCKET_NAME}/{TEAMS_KEY}")
+    return TEAMS_KEY
+
+
 def _run_bronze_backfill(seasons: list[int]) -> dict:
     """The actual work - only runs inside the detached async worker invocation."""
     written = []
@@ -262,6 +284,16 @@ def _run_bronze_backfill(seasons: list[int]) -> dict:
             except Exception as e:
                 log.warning(f"  Failed {dataset} season={season}: {e}")
                 errors.append(f"{dataset} season={season}: {e}")
+
+    # teams is pulled once per run, not once per requested season - see
+    # TEAMS_KEY above for why.
+    try:
+        key = _write_teams(nfl.load_teams())
+        if key:
+            written.append(key)
+    except Exception as e:
+        log.warning(f"  Failed teams: {e}")
+        errors.append(f"teams: {e}")
 
     result = {
         "message": f"Bronze backfill complete: {len(written)} partitions written"
