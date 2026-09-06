@@ -35,15 +35,21 @@ Expected API Gateway (Lambda proxy) event body for POST:
         "seasons": [2021, 2022, 2023, 2024, 2025]
     }
 
-`seasons` is capped at 15 and cannot include the current year (that
-season isn't complete yet) - validated here independently of the admin
-panel's own year-picker limits, since this endpoint could be called
-directly.
+`seasons` is capped at 15 and cannot include anything past the current
+roster-year (nflreadpy's `get_current_season(roster=True)` - the year
+becomes "current" on March 15, when free agency/draft roster movement
+starts, well before the season itself kicks off) - validated here
+independently of the admin panel's own year-picker limits, since this
+endpoint could be called directly. The current season IS allowed and
+expected to be pulled - draft prep needs to see who's on rosters going
+into the season, even though `weekly_stats`/`pbp` for that season will
+come back sparse or empty until games are actually played (handled by
+`_write_partition` skipping empty frames, same as any other dataset).
 
 Every run unconditionally purges every existing bronze partition older
-than the current season, across all datasets, before re-pulling whatever
-`seasons` was requested - there is no way to opt out. It's a full
-historical reset every time, not a per-request cleanup.
+than the current roster-year, across all datasets, before re-pulling
+whatever `seasons` was requested - there is no way to opt out. It's a
+full historical reset every time, not a per-request cleanup.
 
 Auth: API Gateway's Cognito authorizer confirms identity before invoking
 this function. This function additionally checks the `cognito:groups`
@@ -94,7 +100,6 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime
 
 import boto3
 import nflreadpy as nfl
@@ -206,9 +211,13 @@ def _get_job(job_id: str) -> dict | None:
 
 def _purge_dataset_before_current_season(dataset: str) -> None:
     """Deletes every existing partition for `dataset` older than the current
-    season - independent of which seasons this request is re-pulling, since
-    purge is meant as a full historical reset, not a per-request cleanup."""
-    current_year = datetime.now().year
+    roster-year - independent of which seasons this request is re-pulling,
+    since purge is meant as a full historical reset, not a per-request
+    cleanup. Uses roster=True (March 15 cutoff, not Labor Day) so a stale
+    prior-season roster partition gets purged as soon as the new season's
+    free agency/draft movement makes it current, rather than lingering
+    until games actually start in September."""
+    current_year = nfl.get_current_season(roster=True)
     prefix = f"bronze/{dataset}/"
     resp = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=prefix)
     for obj in resp.get("Contents", []):
@@ -274,10 +283,10 @@ def _validate_request(body: dict) -> tuple[list[int] | None, dict | None]:
     if len(seasons) > MAX_SEASONS:
         return None, _response(400, {"error": f"`seasons` cannot span more than {MAX_SEASONS} years."})
 
-    current_year = datetime.now().year
-    if any(season >= current_year for season in seasons):
+    current_season = nfl.get_current_season(roster=True)
+    if any(season > current_season for season in seasons):
         return None, _response(400, {
-            "error": f"`seasons` cannot include {current_year} or later - that season isn't complete yet.",
+            "error": f"`seasons` cannot include anything past {current_season} - that season hasn't started yet.",
         })
 
     return seasons, None

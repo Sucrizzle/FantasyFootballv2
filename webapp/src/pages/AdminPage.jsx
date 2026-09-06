@@ -2,10 +2,20 @@ import { useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import './AdminPage.css'
 
-const CURRENT_YEAR = new Date().getFullYear()
-const MOST_RECENT_SEASON = CURRENT_YEAR - 1
-// 15 seasons back from the most recent completed one - the current year is
-// never selectable since its season isn't complete yet.
+// Mirrors nflreadpy's get_current_season(roster=True) / BronzeBackfill.py's
+// validation cutoff - the season becomes "current" on March 15 (free
+// agency/draft roster movement), not on Jan 1 or once the season itself
+// completes. The current season IS selectable: draft prep needs rosters
+// for the season that's about to be played, even though weekly_stats/pbp
+// for it will come back sparse until games are actually played.
+function getCurrentRosterSeason() {
+  const now = new Date()
+  const march15 = new Date(now.getFullYear(), 2, 15)
+  return now >= march15 ? now.getFullYear() : now.getFullYear() - 1
+}
+
+const MOST_RECENT_SEASON = getCurrentRosterSeason()
+// 15 seasons back from the current roster season.
 const SEASON_OPTIONS = Array.from({ length: 15 }, (_, i) => MOST_RECENT_SEASON - i)
 
 // Set VITE_API_BASE_URL in webapp/.env.local once the API Gateway is
