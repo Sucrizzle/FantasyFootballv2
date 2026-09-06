@@ -1,3 +1,6 @@
 [
-      { "name": "calendar", "query_file": "calendar.sql", "output_path": "gold/calendar/calendar.parquet" }
+      { "name": "dim_calendar", "query_file": "dim_calendar.sql", "output_path": "gold/dimesnions/dim_calendar.parquet" },
+      { "name": "dim_schedule", "query_file": "dim_schedule.sql", "output_path": "gold/dimesnions/dim_schedule.parquet" },
+
+      { "name": "fact_team_stats_weekly", "query_file": "fact_team_stats_weekly.sql", "output_path": "gold/facts/fact_team_stats_weekly.parquet" }
 ]
