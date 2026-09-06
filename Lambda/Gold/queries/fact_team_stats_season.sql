@@ -17,4 +17,3 @@ join read_parquet('BUCKET_PLACEHOLDER/gold/dimensions/dim_schedule.parquet', uni
 join read_parquet('BUCKET_PLACEHOLDER/gold/dimensions/dim_calendar.parquet', union_by_name = true) dc
   on ds.week_id = dc.week_id
 group by 1,2,3
-;
