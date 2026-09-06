@@ -15,4 +15,3 @@ select
 , s.away_team
 , s.home_team
 FROM read_parquet('s3://fantasy-football-dev-808943963151-ca-central-1-an/silver/schedules/schedules.parquet', union_by_name = true) s
-;
