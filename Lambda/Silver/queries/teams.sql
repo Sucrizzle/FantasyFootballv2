@@ -1,6 +1,6 @@
 select
   t.team_id
-, t.team_abbr as t.team
+, t.team_abbr as team
 , t.team_name
 , t.team_nick
 , t.team_conf
