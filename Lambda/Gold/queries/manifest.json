@@ -1,6 +1,8 @@
 [
       { "name": "dim_calendar", "query_file": "dim_calendar.sql", "output_path": "gold/dimensions/dim_calendar.parquet" },
       { "name": "dim_schedule", "query_file": "dim_schedule.sql", "output_path": "gold/dimensions/dim_schedule.parquet" },
+      { "name": "dim_player", "query_file": "dim_player.sql", "output_path": "gold/dimensions/dim_player.parquet" },
 
-      { "name": "fact_team_stats_weekly", "query_file": "fact_team_stats_weekly.sql", "output_path": "gold/facts/fact_team_stats_weekly.parquet" }
+      { "name": "fact_team_stats_weekly", "query_file": "fact_team_stats_weekly.sql", "output_path": "gold/facts/fact_team_stats_weekly.parquet" },
+      { "name": "fact_team_stats_season", "query_file": "fact_team_stats_season.sql", "output_path": "gold/facts/fact_team_stats_season.parquet" }
 ]

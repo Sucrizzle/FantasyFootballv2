@@ -8,10 +8,8 @@ select
     else 'Unknown'
   end as game_category
 , s.game_datetime
-, case
-	when s.location= 'Neutral' then 'Y'
-	else 'N'
-  end as is_neutral_location
+, bool_or( s.location= 'Neutral') as is_neutral_location
 , s.away_team
 , s.home_team
-FROM read_parquet('s3://fantasy-football-dev-808943963151-ca-central-1-an/silver/schedules/schedules.parquet', union_by_name = true) s
+FROM read_parquet('BUCKET_PLACEHOLDER/silver/schedules/schedules.parquet', union_by_name = true) s
+group by all

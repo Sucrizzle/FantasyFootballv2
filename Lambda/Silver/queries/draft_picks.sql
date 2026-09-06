@@ -3,7 +3,7 @@ select
 , dp.gsis_id
 , dp.round
 , dp.pick
-, cm_t.target
+, cm_t.target as draft_team
 , dp.pfr_player_id
 , dp.cfb_player_id
 , dp.pfr_player_name
