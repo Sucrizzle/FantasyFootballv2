@@ -9,6 +9,8 @@ on:
       - "Lambda/Bronze/BronzeBackfill.py"
       - "Lambda/Silver/Silver.py"
       - "Lambda/Silver/queries/*"
+      - "Lambda/Gold/Gold.py"
+      - "Lambda/Gold/queries/*"
       - "Datasets/Mappings/*.csv"
       - ".github/workflows/deploy-FantasyFootballManager.yml"
 
@@ -22,6 +24,7 @@ jobs:
     env:
       BACKFILL_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-bronze-backfill' || 'fantasy-football-bronze-backfill-dev' }}
       SILVER_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-silver' || 'fantasy-football-silver-dev' }}
+      GOLD_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-gold' || 'fantasy-football-gold-dev' }}
       MAPPINGS_BUCKET: ${{ github.ref_name == 'main' && 'fantasy-football-808943963151-ca-central-1-an' || 'fantasy-football-dev-808943963151-ca-central-1-an' }}
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +47,11 @@ jobs:
         run: |
           aws s3 cp Lambda/Silver/queries/ \
             "s3://$MAPPINGS_BUCKET/silver/queries/" --recursive
+
+      - name: Upload Gold query files
+        run: |
+          aws s3 cp Lambda/Gold/queries/ \
+            "s3://$MAPPINGS_BUCKET/gold/queries/" --recursive
 
       - name: Package function code
         run: |
@@ -74,4 +82,19 @@ jobs:
       - name: Wait for Silver update to finish
         run: |
           aws lambda wait function-updated --function-name "$SILVER_FUNCTION_NAME"
+
+      - name: Package Gold function code
+        run: |
+          cd Lambda/Gold
+          zip function.zip Gold.py
+
+      - name: Deploy Gold to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name "$GOLD_FUNCTION_NAME" \
+            --zip-file fileb://Lambda/Gold/function.zip
+
+      - name: Wait for Gold update to finish
+        run: |
+          aws lambda wait function-updated --function-name "$GOLD_FUNCTION_NAME"
 

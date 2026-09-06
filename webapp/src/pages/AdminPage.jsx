@@ -27,7 +27,7 @@ const BACKFILL_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/bronze-backfill` 
 const SILVER_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/silver` : null
 
 export default function AdminPage() {
-  const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 10)
+  const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 11)
   const [endSeason, setEndSeason] = useState(MOST_RECENT_SEASON)
   const [status, setStatus] = useState('ready') // ready | running | success | error
   const [message, setMessage] = useState('')

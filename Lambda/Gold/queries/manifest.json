@@ -1,0 +1,3 @@
+[
+      { "name": "calendar", "query_file": "calendar.sql", "output_path": "gold/calendar/calendar.parquet" }
+]
