@@ -39,8 +39,13 @@ export default function Sidebar({ isAdmin, user, signOut }) {
           <span className="sidebar-link-text">Draft Board</span>
         </NavLink>
         {isAdmin && (
-          <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
-            <span className="sidebar-link-text">Admin</span>
+          <NavLink to="/pipeline" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <span className="sidebar-link-text">Pipeline</span>
+          </NavLink>
+        )}
+        {isAdmin && (
+          <NavLink to="/config" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <span className="sidebar-link-text">Config</span>
           </NavLink>
         )}
       </nav>

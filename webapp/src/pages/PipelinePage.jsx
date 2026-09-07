@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
-import './AdminPage.css'
+import './PipelinePage.css'
 
 // Mirrors nflreadpy's get_current_season(roster=True) / BronzeBackfill.py's
 // validation cutoff - the season becomes "current" on March 15 (free
@@ -23,11 +23,11 @@ const SEASON_OPTIONS = Array.from({ length: 15 }, (_, i) => MOST_RECENT_SEASON -
 // page, so routes are built on top of it rather than each page having its
 // own base URL variable.
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
-const BACKFILL_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/bronze-backfill` : null
-const SILVER_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/silver` : null
-const GOLD_API_URL = API_BASE_URL ? `${API_BASE_URL}/admin/gold` : null
+const BACKFILL_API_URL = API_BASE_URL ? `${API_BASE_URL}/pipeline/bronze-backfill` : null
+const SILVER_API_URL = API_BASE_URL ? `${API_BASE_URL}/pipeline/silver` : null
+const GOLD_API_URL = API_BASE_URL ? `${API_BASE_URL}/pipeline/gold` : null
 
-export default function AdminPage() {
+export default function PipelinePage() {
   const [startSeason, setStartSeason] = useState(MOST_RECENT_SEASON - 11)
   const [endSeason, setEndSeason] = useState(MOST_RECENT_SEASON)
   const [status, setStatus] = useState('ready') // ready | running | success | error
@@ -164,18 +164,18 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="admin-page">
-      <h2>Admin</h2>
+    <div className="pipeline-page">
+      <h2>Pipeline</h2>
 
-      <section className="admin-panel">
+      <section className="pipeline-panel">
         <h3>Bronze Layer Backfill</h3>
-        <p className="admin-panel-description">
+        <p className="pipeline-panel-description">
           Pulls rosters, weekly stats, depth charts, draft picks, and injuries
           from nflreadpy and writes them to the S3 bronze layer. Every run
           purges existing data older than the current season before re-pulling.
         </p>
 
-        <div className="admin-form-row">
+        <div className="pipeline-form-row">
           <label>
             Start Season
             <select value={startSeason} onChange={(e) => setStartSeason(Number(e.target.value))}>
@@ -199,13 +199,13 @@ export default function AdminPage() {
           {status === 'running' ? 'Running…' : 'Run Backfill'}
         </button>
 
-        {status === 'success' && <p className="admin-status admin-status-success">{message}</p>}
-        {status === 'error' && <p className="admin-status admin-status-error">{message}</p>}
+        {status === 'success' && <p className="pipeline-status pipeline-status-success">{message}</p>}
+        {status === 'error' && <p className="pipeline-status pipeline-status-error">{message}</p>}
       </section>
 
-      <section className="admin-panel">
+      <section className="pipeline-panel">
         <h3>Silver Layer Cleansing</h3>
-        <p className="admin-panel-description">
+        <p className="pipeline-panel-description">
           Interim manual trigger while silver's design is still being sorted
           out - runs rosters cleansing against whatever's currently in
           bronze. Will eventually run automatically after a successful
@@ -216,13 +216,13 @@ export default function AdminPage() {
           {silverStatus === 'running' ? 'Running…' : 'Run Silver'}
         </button>
 
-        {silverStatus === 'success' && <p className="admin-status admin-status-success">{silverMessage}</p>}
-        {silverStatus === 'error' && <p className="admin-status admin-status-error">{silverMessage}</p>}
+        {silverStatus === 'success' && <p className="pipeline-status pipeline-status-success">{silverMessage}</p>}
+        {silverStatus === 'error' && <p className="pipeline-status pipeline-status-error">{silverMessage}</p>}
       </section>
 
-      <section className="admin-panel">
+      <section className="pipeline-panel">
         <h3>Gold Layer</h3>
-        <p className="admin-panel-description">
+        <p className="pipeline-panel-description">
           Interim manual trigger, same pattern as Silver - runs gold's
           manifest-driven queries (joins across silver sources, engineered
           features) against whatever's currently in silver. Will eventually
@@ -234,8 +234,8 @@ export default function AdminPage() {
           {goldStatus === 'running' ? 'Running…' : 'Run Gold'}
         </button>
 
-        {goldStatus === 'success' && <p className="admin-status admin-status-success">{goldMessage}</p>}
-        {goldStatus === 'error' && <p className="admin-status admin-status-error">{goldMessage}</p>}
+        {goldStatus === 'success' && <p className="pipeline-status pipeline-status-success">{goldMessage}</p>}
+        {goldStatus === 'error' && <p className="pipeline-status pipeline-status-error">{goldMessage}</p>}
       </section>
     </div>
   )

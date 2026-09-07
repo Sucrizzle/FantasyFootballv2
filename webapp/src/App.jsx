@@ -3,17 +3,26 @@ import '@aws-amplify/ui-react/styles.css'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useIsAdmin } from './auth/useAdmin'
 import DraftBoardPage from './pages/DraftBoardPage'
-import AdminPage from './pages/AdminPage'
+import PipelinePage from './pages/PipelinePage'
+import ConfigPage from './pages/ConfigPage'
 import TrustDeviceBanner from './components/TrustDeviceBanner'
 import Sidebar from './components/Sidebar'
 import './App.css'
 
-function AdminRoute() {
+function PipelineRoute() {
   const isAdmin = useIsAdmin()
 
   if (isAdmin === null) return <p>Loading…</p>
   if (!isAdmin) return <Navigate to="/" replace />
-  return <AdminPage />
+  return <PipelinePage />
+}
+
+function ConfigRoute() {
+  const isAdmin = useIsAdmin()
+
+  if (isAdmin === null) return <p>Loading…</p>
+  if (!isAdmin) return <Navigate to="/" replace />
+  return <ConfigPage />
 }
 
 function AppShell({ signOut, user }) {
@@ -30,7 +39,8 @@ function AppShell({ signOut, user }) {
           <main>
             <Routes>
               <Route path="/" element={<DraftBoardPage />} />
-              <Route path="/admin" element={<AdminRoute />} />
+              <Route path="/pipeline" element={<PipelineRoute />} />
+              <Route path="/config" element={<ConfigRoute />} />
             </Routes>
           </main>
         </div>
