@@ -21,6 +21,12 @@ const fixed2 = (v) => (typeof v === 'number' ? v.toFixed(2) : v)
 // just this one formatting change for draft_score specifically.
 const formatDraftScore = (v) => (typeof v === 'number' ? (v < 0 ? `(${Math.abs(v).toFixed(2)})` : v.toFixed(2)) : v)
 
+// Purely a rendering concern, applied after filter/search/sort - see chat:
+// pagination must never change what's searchable, only how much of the
+// already-filtered/sorted result renders at once.
+const PAGE_SIZE_OPTIONS = [15, 25, 50, 100]
+const DEFAULT_PAGE_SIZE = 15
+
 const COLUMNS = [
   { key: 'pos', label: 'Pos' },
   { key: 'team', label: 'Team' },
@@ -252,6 +258,26 @@ export default function DraftBoardPage() {
   const [selectedPositions, setSelectedPositions] = useState(null)
   const [expandedKey, setExpandedKey] = useState(null)
   const [searchText, setSearchText] = useState('')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+
+  // Reset to page 1 whenever the filtered set (or the page size itself)
+  // changes shape - otherwise it's easy to end up sitting on "page 6" of
+  // a result set that now only has 2 pages, looking at an empty table for
+  // no visible reason.
+  //
+  // Adjusted during render, not in a useEffect - this is React's own
+  // recommended pattern for "reset state when other state changes"
+  // (see "You Might Not Need An Effect"): calling setState mid-render
+  // bails out and re-renders immediately with the reset applied, before
+  // anything commits to the screen, rather than committing once and then
+  // re-rendering a beat later via an effect.
+  const filterKey = `${searchText}|${JSON.stringify(selectedPositions)}|${pageSize}`
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey)
+    setCurrentPage(1)
+  }
 
   useEffect(() => {
     ;(async () => {
@@ -318,6 +344,14 @@ export default function DraftBoardPage() {
     return sortDir === 'asc' ? cmp : -cmp
   })
 
+  const totalPages = Math.max(Math.ceil(sortedRows.length / pageSize), 1)
+  // Defensive clamp on top of the reset-on-filter-change effect above -
+  // if currentPage ever ends up past the end (e.g. a filter shrinks the
+  // result set right at a page boundary), fall back to the last real page
+  // rather than rendering nothing.
+  const safePage = Math.min(currentPage, totalPages)
+  const pagedRows = sortedRows.slice((safePage - 1) * pageSize, safePage * pageSize)
+
   return (
     <div className="draft-board-page">
       <h2>Draft Board</h2>
@@ -339,6 +373,14 @@ export default function DraftBoardPage() {
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
+          <label className="draft-board-page-size">
+            Per page
+            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </label>
         </div>
       )}
 
@@ -355,7 +397,7 @@ export default function DraftBoardPage() {
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((row) => {
+            {pagedRows.map((row) => {
               const key = `${row.pos}-${row.entity_id}`
               const isExpanded = expandedKey === key
               return (
@@ -385,6 +427,24 @@ export default function DraftBoardPage() {
             })}
           </tbody>
         </table>
+      )}
+
+      {loadStatus === 'ready' && totalPages > 1 && (
+        <div className="draft-board-pagination">
+          <button type="button" onClick={() => setCurrentPage((p) => p - 1)} disabled={safePage <= 1}>
+            ‹ Prev
+          </button>
+          <span>
+            Page {safePage} of {totalPages}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCurrentPage((p) => p + 1)}
+            disabled={safePage >= totalPages}
+          >
+            Next ›
+          </button>
+        </div>
       )}
     </div>
   )
