@@ -3,6 +3,8 @@ import '@aws-amplify/ui-react/styles.css'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useIsAdmin } from './auth/useAdmin'
 import DraftBoardPage from './pages/DraftBoardPage'
+import DraftLogPage from './pages/DraftLogPage'
+import DraftSummaryPage from './pages/DraftSummaryPage'
 import PipelinePage from './pages/PipelinePage'
 import ConfigPage from './pages/ConfigPage'
 import TrustDeviceBanner from './components/TrustDeviceBanner'
@@ -39,6 +41,8 @@ function AppShell({ signOut, user }) {
           <main>
             <Routes>
               <Route path="/" element={<DraftBoardPage />} />
+              <Route path="/draft-log" element={<DraftLogPage />} />
+              <Route path="/draft-summary" element={<DraftSummaryPage />} />
               <Route path="/pipeline" element={<PipelineRoute />} />
               <Route path="/config" element={<ConfigRoute />} />
             </Routes>

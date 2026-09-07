@@ -1,0 +1,84 @@
+.draft-log-status-error {
+  color: var(--error);
+  margin-top: 1rem;
+}
+
+.draft-log-round-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.draft-log-empty {
+  color: var(--panel-muted);
+  margin-top: 2rem;
+}
+
+.draft-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.draft-log-table th,
+.draft-log-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 0.9rem;
+}
+
+.draft-log-table select {
+  max-width: 12rem;
+}
+
+.draft-log-table button {
+  margin-right: 0.4rem;
+}
+
+.draft-log-player-combobox {
+  position: relative;
+  display: inline-block;
+}
+
+.draft-log-player-combobox input {
+  width: 16rem;
+  max-width: 100%;
+}
+
+.draft-log-player-combobox-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  width: 16rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.draft-log-player-combobox-menu button {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  margin-right: 0;
+  font-size: 0.85rem;
+}
+
+.draft-log-player-combobox-menu button:hover {
+  background: var(--panel-overlay);
+}
+
+.draft-log-player-combobox-empty {
+  padding: 0.35rem 0.5rem;
+  color: var(--panel-muted);
+  font-size: 0.85rem;
+}

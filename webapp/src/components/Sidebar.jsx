@@ -38,6 +38,12 @@ export default function Sidebar({ isAdmin, user, signOut }) {
         <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
           <span className="sidebar-link-text">Draft Board</span>
         </NavLink>
+        <NavLink to="/draft-log" className={({ isActive }) => (isActive ? 'active' : '')}>
+          <span className="sidebar-link-text">Draft Log</span>
+        </NavLink>
+        <NavLink to="/draft-summary" className={({ isActive }) => (isActive ? 'active' : '')}>
+          <span className="sidebar-link-text">Draft Summary</span>
+        </NavLink>
         {isAdmin && (
           <NavLink to="/pipeline" className={({ isActive }) => (isActive ? 'active' : '')}>
             <span className="sidebar-link-text">Pipeline</span>

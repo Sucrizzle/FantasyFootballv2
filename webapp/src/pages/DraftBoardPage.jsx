@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
+import { computeSlotFill } from '../lib/rosterSlots'
 import './DraftBoardPage.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
@@ -7,6 +8,8 @@ const DRAFT_BOARD_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board` : null
 const HISTORY_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board/history` : null
 const DRAFT_STATE_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-state` : null
 const DRAFT_ORDER_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/draft_order` : null
+const MY_TEAM_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : null
+const ROSTER_POSITIONS_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
 
 // Snake reverses team_order every other round; round_robin repeats the
 // same order every round. pick_number is 1-indexed and guaranteed gapless
@@ -298,106 +301,13 @@ function PlayerDetailPanel({ row, history }) {
   )
 }
 
-// Corrections (any pick) vs. undo (last pick only) are genuinely different
-// operations server-side - see DraftState.py. Edit-in-place keeps
-// pick_number gapless; undo only works on the highest pick_number for the
-// same reason.
-function DraftLog({ picks, rows, draftOrder, onEdit, onUndo, editError }) {
-  const [editingPickNumber, setEditingPickNumber] = useState(null)
-  const [editTeam, setEditTeam] = useState('')
-  const [editEntityKey, setEditEntityKey] = useState('')
-
-  if (picks.length === 0) {
-    return <p className="draft-log-empty">No picks recorded yet.</p>
-  }
-
-  const sortedPicks = [...picks].sort((a, b) => b.pick_number - a.pick_number)
-  const latestPickNumber = Math.max(...picks.map((p) => p.pick_number))
-
-  function startEdit(pick) {
-    setEditingPickNumber(pick.pick_number)
-    setEditTeam(pick.team)
-    setEditEntityKey(`${pick.entity_id}|${pick.pos}`)
-  }
-
-  async function saveEdit(pickNumber) {
-    const [entity_id, pos] = editEntityKey.split('|')
-    await onEdit(pickNumber, { team: editTeam, entity_id, pos })
-    setEditingPickNumber(null)
-  }
-
-  return (
-    <div className="draft-log">
-      <h3>Draft Log</h3>
-      {editError && <p className="draft-board-status-error">{editError}</p>}
-
-      <table className="draft-log-table">
-        <thead>
-          <tr>
-            <th>Pick</th>
-            <th>Team</th>
-            <th>Player</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {sortedPicks.map((pick) => {
-            const isEditing = editingPickNumber === pick.pick_number
-            const player = rows.find((r) => r.entity_id === pick.entity_id && r.pos === pick.pos)
-            const isLatest = pick.pick_number === latestPickNumber
-
-            return (
-              <tr key={pick.pick_number}>
-                <td>#{pick.pick_number}</td>
-                {isEditing ? (
-                  <>
-                    <td>
-                      <select value={editTeam} onChange={(e) => setEditTeam(e.target.value)}>
-                        {(draftOrder?.team_order ?? []).map((t) => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <select value={editEntityKey} onChange={(e) => setEditEntityKey(e.target.value)}>
-                        {rows.map((r) => (
-                          <option key={`${r.entity_id}|${r.pos}`} value={`${r.entity_id}|${r.pos}`}>
-                            {r.player_name} ({r.pos}, {r.team})
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <button type="button" onClick={() => saveEdit(pick.pick_number)}>Save</button>
-                      <button type="button" onClick={() => setEditingPickNumber(null)}>Cancel</button>
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    <td>{pick.team}</td>
-                    <td>{player ? `${player.player_name} (${player.pos})` : `${pick.entity_id} (${pick.pos})`}</td>
-                    <td>
-                      <button type="button" onClick={() => startEdit(pick)}>Edit</button>
-                      {isLatest && (
-                        <button type="button" onClick={() => onUndo(pick.pick_number)}>Undo</button>
-                      )}
-                    </td>
-                  </>
-                )}
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
 export default function DraftBoardPage() {
   const [rows, setRows] = useState([])
   const [historyRows, setHistoryRows] = useState([])
   const [picks, setPicks] = useState([])
   const [draftOrder, setDraftOrder] = useState({ draft_type: 'snake', team_order: [] })
+  const [myTeam, setMyTeam] = useState(null)
+  const [rosterPositions, setRosterPositions] = useState({ slots: [] })
   const [draftError, setDraftError] = useState('')
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
   const [message, setMessage] = useState('')
@@ -431,7 +341,14 @@ export default function DraftBoardPage() {
 
   useEffect(() => {
     ;(async () => {
-      if (!DRAFT_BOARD_API_URL || !HISTORY_API_URL || !DRAFT_STATE_API_URL || !DRAFT_ORDER_CONFIG_URL) {
+      if (
+        !DRAFT_BOARD_API_URL ||
+        !HISTORY_API_URL ||
+        !DRAFT_STATE_API_URL ||
+        !DRAFT_ORDER_CONFIG_URL ||
+        !MY_TEAM_CONFIG_URL ||
+        !ROSTER_POSITIONS_CONFIG_URL
+      ) {
         setLoadStatus('error')
         setMessage('VITE_API_BASE_URL is not configured yet.')
         return
@@ -442,29 +359,37 @@ export default function DraftBoardPage() {
         const idToken = session.tokens?.idToken?.toString()
         const headers = { Authorization: idToken }
         // Fetched once up front, alongside the main board, rather than
-        // per-row-click - all four are small, and this avoids extra
+        // per-row-click - all six are small, and this avoids extra
         // network round-trips as the user interacts with the board.
-        const [boardRes, historyRes, draftStateRes, draftOrderRes] = await Promise.all([
+        const [boardRes, historyRes, draftStateRes, draftOrderRes, myTeamRes, rosterRes] = await Promise.all([
           fetch(DRAFT_BOARD_API_URL, { headers }),
           fetch(HISTORY_API_URL, { headers }),
           fetch(DRAFT_STATE_API_URL, { headers }),
           fetch(DRAFT_ORDER_CONFIG_URL, { headers }),
+          fetch(MY_TEAM_CONFIG_URL, { headers }),
+          fetch(ROSTER_POSITIONS_CONFIG_URL, { headers }),
         ])
-        const [body, historyBody, picksBody, draftOrderBody] = await Promise.all([
+        const [body, historyBody, picksBody, draftOrderBody, myTeamBody, rosterBody] = await Promise.all([
           boardRes.json(),
           historyRes.json(),
           draftStateRes.json(),
           draftOrderRes.json(),
+          myTeamRes.json(),
+          rosterRes.json(),
         ])
         if (!boardRes.ok) throw new Error(body.error || `Request failed with status ${boardRes.status}`)
         if (!historyRes.ok) throw new Error(historyBody.error || `Request failed with status ${historyRes.status}`)
         if (!draftStateRes.ok) throw new Error(picksBody.error || `Request failed with status ${draftStateRes.status}`)
         if (!draftOrderRes.ok) throw new Error(draftOrderBody.error || `Request failed with status ${draftOrderRes.status}`)
+        if (!myTeamRes.ok) throw new Error(myTeamBody.error || `Request failed with status ${myTeamRes.status}`)
+        if (!rosterRes.ok) throw new Error(rosterBody.error || `Request failed with status ${rosterRes.status}`)
 
         setRows(body)
         setHistoryRows(historyBody)
         setPicks(picksBody)
         setDraftOrder(draftOrderBody)
+        setMyTeam(myTeamBody.team_name ?? null)
+        setRosterPositions(rosterBody)
         setLoadStatus('ready')
       } catch (err) {
         setLoadStatus('error')
@@ -493,7 +418,13 @@ export default function DraftBoardPage() {
     })
   }
 
+  // Drafted players are removed from the board entirely, not just dimmed -
+  // once picked, there's nothing left to decide about them here (edits/undo
+  // live on the Draft Log page instead).
+  const pickedKeys = new Set(picks.map((p) => `${p.entity_id}|${p.pos}`))
+
   const filteredRows = rows
+    .filter((r) => !pickedKeys.has(`${r.entity_id}|${r.pos}`))
     .filter((r) => selectedPositions === null || selectedPositions.includes(r.pos))
     .filter((r) => (r.player_name ?? '').toLowerCase().includes(searchText.trim().toLowerCase()))
 
@@ -518,7 +449,7 @@ export default function DraftBoardPage() {
   // undo-last-only), so the next pick number is always just the count.
   const pickNumber = picks.length + 1
   const onTheClock = computeOnTheClock(draftOrder, pickNumber)
-  const pickedKeys = new Set(picks.map((p) => `${p.entity_id}|${p.pos}`))
+  const myTeamSlotFill = myTeam ? computeSlotFill(picks, myTeam, rosterPositions) : []
 
   async function draftPlayer(row) {
     if (!DRAFT_STATE_API_URL || !onTheClock) return
@@ -543,47 +474,6 @@ export default function DraftBoardPage() {
     }
   }
 
-  async function editPick(pickNumber, { team, entity_id, pos }) {
-    if (!DRAFT_STATE_API_URL) return
-
-    setDraftError('')
-    try {
-      const session = await fetchAuthSession()
-      const idToken = session.tokens?.idToken?.toString()
-      const res = await fetch(`${DRAFT_STATE_API_URL}/${pickNumber}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: idToken },
-        body: JSON.stringify({ team, entity_id, pos }),
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-
-      setPicks((prev) => prev.map((p) => (p.pick_number === pickNumber ? body : p)))
-    } catch (err) {
-      setDraftError(err.message)
-    }
-  }
-
-  async function undoPick(pickNumber) {
-    if (!DRAFT_STATE_API_URL) return
-
-    setDraftError('')
-    try {
-      const session = await fetchAuthSession()
-      const idToken = session.tokens?.idToken?.toString()
-      const res = await fetch(`${DRAFT_STATE_API_URL}/${pickNumber}`, {
-        method: 'DELETE',
-        headers: { Authorization: idToken },
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-
-      setPicks((prev) => prev.filter((p) => p.pick_number !== pickNumber))
-    } catch (err) {
-      setDraftError(err.message)
-    }
-  }
-
   return (
     <div className="draft-board-page">
       <h2>Draft Board</h2>
@@ -597,6 +487,22 @@ export default function DraftBoardPage() {
         </p>
       )}
       {draftError && <p className="draft-board-status-error">{draftError}</p>}
+
+      {loadStatus === 'ready' && myTeam && (
+        <div className="draft-board-my-team">
+          <strong>{myTeam} (My Team)</strong>
+          <div className="draft-board-my-team-slots">
+            {myTeamSlotFill.map((s) => (
+              <span
+                key={s.slot_name}
+                className={`draft-board-slot-chip ${s.open === 0 ? 'draft-board-slot-chip-full' : ''}`}
+              >
+                {s.slot_name} {s.filled}/{s.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loadStatus === 'ready' && (
         <div className="draft-board-controls">
@@ -640,11 +546,10 @@ export default function DraftBoardPage() {
             {pagedRows.map((row) => {
               const key = `${row.pos}-${row.entity_id}`
               const isExpanded = expandedKey === key
-              const isPicked = pickedKeys.has(`${row.entity_id}|${row.pos}`)
               return (
                 <Fragment key={key}>
                   <tr
-                    className={`draft-board-row ${isPicked ? 'draft-board-row-picked' : ''}`}
+                    className="draft-board-row"
                     onClick={() => setExpandedKey(isExpanded ? null : key)}
                   >
                     {COLUMNS.map((col) => (
@@ -653,13 +558,13 @@ export default function DraftBoardPage() {
                     <td>
                       <button
                         type="button"
-                        disabled={isPicked || !onTheClock}
+                        disabled={!onTheClock}
                         onClick={(e) => {
                           e.stopPropagation()
                           draftPlayer(row)
                         }}
                       >
-                        {isPicked ? 'Drafted' : 'Draft'}
+                        Draft
                       </button>
                     </td>
                   </tr>
@@ -698,17 +603,6 @@ export default function DraftBoardPage() {
             Next ›
           </button>
         </div>
-      )}
-
-      {loadStatus === 'ready' && (
-        <DraftLog
-          picks={picks}
-          rows={rows}
-          draftOrder={draftOrder}
-          onEdit={editPick}
-          onUndo={undoPick}
-          editError={draftError}
-        />
       )}
     </div>
   )

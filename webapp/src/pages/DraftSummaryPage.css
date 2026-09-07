@@ -1,0 +1,47 @@
+.draft-summary-page {
+  max-width: 1100px;
+}
+
+.draft-summary-status-error {
+  color: var(--error);
+  margin-top: 1rem;
+}
+
+.draft-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.draft-summary-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.draft-summary-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.draft-summary-card-mine {
+  border-color: var(--accent);
+}
+
+.draft-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.draft-summary-table th,
+.draft-summary-table td {
+  text-align: left;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.draft-summary-row-full {
+  color: var(--panel-muted);
+}

@@ -55,39 +55,29 @@
   font-size: 0.95rem;
 }
 
-.draft-log {
-  margin-top: 2rem;
-}
-
-.draft-log-empty {
-  color: var(--panel-muted);
-  margin-top: 2rem;
-}
-
-.draft-log-table {
-  width: 100%;
-  border-collapse: collapse;
+.draft-board-my-team {
   margin-top: 0.75rem;
-}
-
-.draft-log-table th,
-.draft-log-table td {
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid var(--panel-border);
   font-size: 0.9rem;
 }
 
-.draft-log-table select {
-  max-width: 12rem;
+.draft-board-my-team-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
 }
 
-.draft-log-table button {
-  margin-right: 0.4rem;
+.draft-board-slot-chip {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  font-size: 0.8rem;
+  color: var(--panel-muted);
 }
 
-.draft-board-row-picked {
-  opacity: 0.5;
+.draft-board-slot-chip-full {
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .draft-board-controls {

@@ -5,7 +5,9 @@
    each page's own CSS file keeps only what's actually specific to it. */
 
 .config-page,
-.pipeline-page {
+.pipeline-page,
+.draft-log-page,
+.draft-summary-page {
   max-width: 640px;
   margin: 0 auto;
   padding: 1.5rem;
