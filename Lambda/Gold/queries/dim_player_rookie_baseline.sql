@@ -1,6 +1,5 @@
 select
-  dp.season
-, case
+  case
 	  when dp.round in (5,6,7) then 'Day 3'
 	  else 'Round ' || dp.round
 	end as draft_position
@@ -22,4 +21,4 @@ join read_parquet('${bucket}/gold/facts/fact_player_stats_season.parquet', union
 on dp.gsis_id = fpss.gsis_id
   and dp.season = fpss.season
 where dp.round in (1,2,3,4,5,6,7)
-group by 1,2,3,4,5,6
+group by 1,2,3,4,5
