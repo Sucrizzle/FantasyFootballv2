@@ -170,14 +170,38 @@
   background: var(--text-h);
 }
 
-.draft-detail-score-positive {
-  color: var(--success);
-  margin: 0.5rem 0 0;
-  font-weight: 600;
+.draft-detail-history-chart {
+  width: 100%;
+  max-width: 280px;
+  height: 90px;
+  margin-top: 0.75rem;
+  display: block;
 }
 
-.draft-detail-score-negative {
-  color: var(--error);
-  margin: 0.5rem 0 0;
-  font-weight: 600;
+.draft-detail-history-goal {
+  stroke: var(--text-h);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+.draft-detail-history-line {
+  fill: none;
+  stroke-width: 2;
+}
+
+.draft-detail-history-dot {
+  stroke: var(--bg);
+  stroke-width: 1;
+}
+
+.draft-detail-history-axis-label {
+  font-size: 6px;
+  fill: var(--panel-muted);
+  text-anchor: middle;
+}
+
+.draft-detail-history-empty {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--panel-muted);
 }

@@ -4,6 +4,7 @@ import './DraftBoardPage.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const DRAFT_BOARD_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board` : null
+const HISTORY_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board/history` : null
 
 // Column contract matches Lambda/Gold/queries/fact_draft_scores.sql's
 // output - only DST exists today, but this table doesn't care how many
@@ -89,7 +90,69 @@ function PositionFilter({ allPositions, selectedPositions, onToggle }) {
 // or past it.
 const CHART_MAX_PPG = 30
 
-function PlayerDetailPanel({ row }) {
+// Plain inline SVG, not a charting library - a handful of points and one
+// reference line doesn't need anything heavier, same reasoning as the bar
+// chart above. Shares CHART_MAX_PPG with the bar chart so a viewer can
+// trust "tall" means the same thing in both charts within one panel.
+function HistoryChart({ history, replacementValue, color }) {
+  if (history.length === 0) {
+    return <p className="draft-detail-history-empty">No season history available.</p>
+  }
+
+  const sorted = [...history].sort((a, b) => a.season - b.season)
+  const width = 280
+  const height = 90
+  const padding = 10
+
+  const scaleX = (i) =>
+    padding + (sorted.length === 1 ? 0 : (i / (sorted.length - 1)) * (width - padding * 2))
+  const scaleY = (v) =>
+    height - padding - (Math.min(v, CHART_MAX_PPG) / CHART_MAX_PPG) * (height - padding * 2)
+
+  const linePoints = sorted.map((h, i) => `${scaleX(i)},${scaleY(h.fpts_pg)}`).join(' ')
+  const replacementY = scaleY(replacementValue)
+
+  return (
+    <svg
+      className="draft-detail-history-chart"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+    >
+      <line
+        className="draft-detail-history-goal"
+        x1={padding}
+        x2={width - padding}
+        y1={replacementY}
+        y2={replacementY}
+      />
+      <polyline className="draft-detail-history-line" style={{ stroke: color }} points={linePoints} />
+      {sorted.map((h, i) => (
+        <circle
+          key={h.season}
+          className="draft-detail-history-dot"
+          style={{ fill: color }}
+          cx={scaleX(i)}
+          cy={scaleY(h.fpts_pg)}
+          r={3}
+        >
+          <title>{`${h.season}: ${fixed2(h.fpts_pg)}`}</title>
+        </circle>
+      ))}
+      {sorted.map((h, i) => (
+        <text
+          key={`label-${h.season}`}
+          className="draft-detail-history-axis-label"
+          x={scaleX(i)}
+          y={height}
+        >
+          {h.season}
+        </text>
+      ))}
+    </svg>
+  )
+}
+
+function PlayerDetailPanel({ row, history }) {
   const projectedPct = Math.min((row.proj_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const replacementPct = Math.min((row.r_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const barColor = row.team_color || 'var(--accent)'
@@ -127,6 +190,8 @@ function PlayerDetailPanel({ row }) {
         <p className="draft-detail-legend">
           <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
         </p>
+
+        <HistoryChart history={history} replacementValue={row.r_fpts_pg} color={barColor} />
       </div>
     </div>
   )
@@ -134,6 +199,7 @@ function PlayerDetailPanel({ row }) {
 
 export default function DraftBoardPage() {
   const [rows, setRows] = useState([])
+  const [historyRows, setHistoryRows] = useState([])
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
   const [message, setMessage] = useState('')
   const [sortKey, setSortKey] = useState('draft_score')
@@ -146,7 +212,7 @@ export default function DraftBoardPage() {
 
   useEffect(() => {
     ;(async () => {
-      if (!DRAFT_BOARD_API_URL) {
+      if (!DRAFT_BOARD_API_URL || !HISTORY_API_URL) {
         setLoadStatus('error')
         setMessage('VITE_API_BASE_URL is not configured yet.')
         return
@@ -155,13 +221,19 @@ export default function DraftBoardPage() {
       try {
         const session = await fetchAuthSession()
         const idToken = session.tokens?.idToken?.toString()
-        const res = await fetch(DRAFT_BOARD_API_URL, {
-          headers: { Authorization: idToken },
-        })
-        const body = await res.json()
-        if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+        // Fetched once up front, alongside the main board, rather than
+        // per-row-click - the whole history table is small, and this
+        // avoids a network round-trip every time a row is expanded.
+        const [boardRes, historyRes] = await Promise.all([
+          fetch(DRAFT_BOARD_API_URL, { headers: { Authorization: idToken } }),
+          fetch(HISTORY_API_URL, { headers: { Authorization: idToken } }),
+        ])
+        const [body, historyBody] = await Promise.all([boardRes.json(), historyRes.json()])
+        if (!boardRes.ok) throw new Error(body.error || `Request failed with status ${boardRes.status}`)
+        if (!historyRes.ok) throw new Error(historyBody.error || `Request failed with status ${historyRes.status}`)
 
         setRows(body)
+        setHistoryRows(historyBody)
         setLoadStatus('ready')
       } catch (err) {
         setLoadStatus('error')
@@ -256,7 +328,12 @@ export default function DraftBoardPage() {
                   {isExpanded && (
                     <tr>
                       <td colSpan={COLUMNS.length}>
-                        <PlayerDetailPanel row={row} />
+                        <PlayerDetailPanel
+                          row={row}
+                          history={historyRows.filter(
+                            (h) => h.entity_id === row.entity_id && h.pos === row.pos,
+                          )}
+                        />
                       </td>
                     </tr>
                   )}

@@ -28,16 +28,27 @@ and should hold keys (entity_id), not denormalized dimension attributes
 like team_name; that join belongs at serve time, in the query that's
 actually producing a display-ready result for the UI.
 
-Manifest-free, unlike Silver/Gold - this is always exactly one query, so
-there's no need for a manifest/multiple-query-files abstraction, just a
-single query file loaded directly.
+Manifest-free, unlike Silver/Gold - always exactly one of two known
+queries, picked by request path, rather than a full manifest/multiple-
+query-files abstraction. Both datasets are served from this one Lambda
+rather than standing up a second function - every new Lambda in this
+project costs a real round of AWS console setup (layer, permissions,
+handler fix), and both queries here are the same shape of "read a small
+parquet, return JSON," so splitting them into separate functions would
+just double that setup cost for no benefit.
 
-Expected API Gateway (Lambda proxy) route, with the Cognito JWT authorizer
-attached:
+Expected API Gateway (Lambda proxy) routes, both with the Cognito JWT
+authorizer attached, both pointing at this same function - each needs its
+own Lambda invoke permission scoped to its own route (see the Bronze/
+Silver/Gold stale-permission incident - permissions are scoped per exact
+route ARN, not shared across routes on the same function):
     GET /draft-board
         -> 200 [{"entity_id": "...", "pos": "...", "team_abbr": "...",
                  "player_name": "...", "proj_fpts_pg": ...,
                  "r_fpts_pg": ..., "draft_score": ...}, ...]
+    GET /draft-board/history
+        -> 200 [{"entity_id": "...", "pos": "...", "season": ...,
+                 "fpts_pg": ...}, ...]
 
 Deploy notes:
     - Runtime: Python 3.12 (matches Silver/Gold - duckdb has no cp314
@@ -67,7 +78,14 @@ import duckdb
 os.environ.setdefault("HOME", "/tmp")
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
-QUERY_KEY = "draft-board/queries/draft_board.sql"
+
+# Picked by request path in handler() below - "board" is the default for
+# any path that isn't specifically /history, so this still does something
+# sane if a route ever gets attached without an exact path match.
+QUERY_KEYS = {
+    "board": "draft-board/queries/draft_board.sql",
+    "history": "draft-board/queries/player_history.sql",
+}
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
@@ -83,20 +101,30 @@ def _response(status_code: int, body) -> dict:
     }
 
 
-def _load_query() -> str:
-    obj = s3.get_object(Bucket=BUCKET_NAME, Key=QUERY_KEY)
+def _load_query(query_key: str) -> str:
+    obj = s3.get_object(Bucket=BUCKET_NAME, Key=query_key)
     return obj["Body"].read().decode("utf-8")
 
 
+def _dataset_for_path(event: dict) -> str:
+    # HTTP API (v2.0 payload format) gives the request path as rawPath.
+    path = event.get("rawPath", "")
+    return "history" if path.rstrip("/").endswith("/history") else "board"
+
+
 def handler(event, context):
+    dataset = _dataset_for_path(event)
+
     try:
+        query_key = QUERY_KEYS[dataset]
+
         con = duckdb.connect()
         con.sql("SET home_directory='/tmp';")
         con.sql("INSTALL httpfs; LOAD httpfs;")
         con.sql("CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION 'ca-central-1');")
 
         bucket_uri = f"s3://{BUCKET_NAME}"
-        select_sql = _load_query().replace("${bucket}", bucket_uri)
+        select_sql = _load_query(query_key).replace("${bucket}", bucket_uri)
 
         rel = con.sql(select_sql)
         columns = rel.columns
@@ -115,5 +143,5 @@ def handler(event, context):
 
         return _response(200, results)
     except Exception as e:
-        log.exception("Failed to read draft board")
+        log.exception(f"Failed to read draft board dataset '{dataset}'")
         return _response(500, {"error": str(e)})
