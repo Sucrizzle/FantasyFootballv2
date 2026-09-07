@@ -16,13 +16,16 @@ const DRAFT_BOARD_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board` : null
 // forces "always 2 decimal places" on screen.
 const fixed2 = (v) => (typeof v === 'number' ? v.toFixed(2) : v)
 
+// Accounting-style negatives - (1.23) instead of -1.23 - uncolored,
+// just this one formatting change for draft_score specifically.
+const formatDraftScore = (v) => (typeof v === 'number' ? (v < 0 ? `(${Math.abs(v).toFixed(2)})` : v.toFixed(2)) : v)
+
 const COLUMNS = [
   { key: 'pos', label: 'Pos' },
   { key: 'team', label: 'Team' },
   { key: 'player_name', label: 'Player_Name' },
   { key: 'proj_fpts_pg', label: 'Proj PPG', format: fixed2 },
-  { key: 'r_fpts_pg', label: 'Replacement PPG', format: fixed2 },
-  { key: 'draft_score', label: 'Draft Score', format: fixed2 },
+  { key: 'draft_score', label: 'Draft Score', format: formatDraftScore },
 ]
 
 // Standard "dropdown that expands into checkboxes" pattern - a native
@@ -87,7 +90,6 @@ function PositionFilter({ allPositions, selectedPositions, onToggle }) {
 const CHART_MAX_PPG = 30
 
 function PlayerDetailPanel({ row }) {
-  const scoreIsPositive = row.draft_score >= 0
   const projectedPct = Math.min((row.proj_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const replacementPct = Math.min((row.r_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const barColor = row.team_color || 'var(--accent)'
@@ -118,10 +120,6 @@ function PlayerDetailPanel({ row }) {
         <p className="draft-detail-legend">
           <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
         </p>
-
-        <p className={scoreIsPositive ? 'draft-detail-score-positive' : 'draft-detail-score-negative'}>
-          Draft Score: {scoreIsPositive ? '+' : ''}{fixed2(row.draft_score)}
-        </p>
       </div>
     </div>
   )
@@ -137,6 +135,7 @@ export default function DraftBoardPage() {
   // empty array, which would mean "user deselected every position."
   const [selectedPositions, setSelectedPositions] = useState(null)
   const [expandedKey, setExpandedKey] = useState(null)
+  const [searchText, setSearchText] = useState('')
 
   useEffect(() => {
     ;(async () => {
@@ -184,8 +183,9 @@ export default function DraftBoardPage() {
     })
   }
 
-  const filteredRows =
-    selectedPositions === null ? rows : rows.filter((r) => selectedPositions.includes(r.pos))
+  const filteredRows = rows
+    .filter((r) => selectedPositions === null || selectedPositions.includes(r.pos))
+    .filter((r) => (r.player_name ?? '').toLowerCase().includes(searchText.trim().toLowerCase()))
 
   const sortedRows = [...filteredRows].sort((a, b) => {
     const av = a[sortKey]
@@ -204,11 +204,20 @@ export default function DraftBoardPage() {
       {loadStatus === 'error' && <p className="draft-board-status-error">{message}</p>}
 
       {loadStatus === 'ready' && (
-        <PositionFilter
-          allPositions={allPositions}
-          selectedPositions={selectedPositions}
-          onToggle={togglePosition}
-        />
+        <div className="draft-board-controls">
+          <PositionFilter
+            allPositions={allPositions}
+            selectedPositions={selectedPositions}
+            onToggle={togglePosition}
+          />
+          <input
+            type="text"
+            className="draft-board-search"
+            placeholder="Search player name…"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+        </div>
       )}
 
       {loadStatus === 'ready' && (

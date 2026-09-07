@@ -41,10 +41,21 @@
   color: var(--error);
 }
 
+.draft-board-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.draft-board-search {
+  flex: 1;
+  max-width: 240px;
+}
+
 .draft-board-position-filter {
   position: relative;
   display: inline-block;
-  margin-top: 1rem;
 }
 
 .draft-board-position-filter-menu {
