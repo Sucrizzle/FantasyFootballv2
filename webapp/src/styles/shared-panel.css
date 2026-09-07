@@ -1,0 +1,43 @@
+/* Shared by every admin-style page (Pipeline, Config) - these were
+   previously copy-pasted identically into each page's own CSS file
+   (ConfigPage.css/PipelinePage.css), which meant a change to one had to
+   be remembered and repeated in the other. Consolidated here instead;
+   each page's own CSS file keeps only what's actually specific to it. */
+
+.config-page,
+.pipeline-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  text-align: left;
+}
+
+.config-panel,
+.pipeline-panel {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin-top: 1rem;
+}
+
+.config-panel-description,
+.pipeline-panel-description {
+  color: var(--panel-muted);
+  font-size: 0.9rem;
+}
+
+.config-status,
+.pipeline-status {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.config-status-success,
+.pipeline-status-success {
+  color: var(--success);
+}
+
+.config-status-error,
+.pipeline-status-error {
+  color: var(--error);
+}

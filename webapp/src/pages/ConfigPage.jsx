@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
+import '../styles/shared-panel.css'
 import './ConfigPage.css'
 
 // Same shared API as PipelinePage - see Lambda/Config/Config.py. One

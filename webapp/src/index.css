@@ -11,6 +11,19 @@
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
+  /* Flat (not yet light/dark-adaptive, unlike --text/--bg/--border above) -
+     these back the Pipeline/Config admin pages, which were built dark-only
+     and hardcoded these same values in several places per page. Centralized
+     here so a future color-scheme change (or making these pages properly
+     theme-aware) is a one-place edit instead of hunting hex codes across
+     multiple CSS files. */
+  --panel-border: #444;
+  --panel-muted: #999;
+  --panel-overlay: rgba(255, 255, 255, 0.03);
+  --panel-overlay-strong: rgba(255, 255, 255, 0.1);
+  --success: #4caf50;
+  --error: #f44336;
+
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;

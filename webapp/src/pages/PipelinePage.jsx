@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
+import '../styles/shared-panel.css'
 import './PipelinePage.css'
 
 // Mirrors nflreadpy's get_current_season(roster=True) / BronzeBackfill.py's
