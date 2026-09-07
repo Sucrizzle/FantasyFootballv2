@@ -102,10 +102,12 @@ const CHART_MAX_PPG = 30
 // trust "tall" means the same thing in both charts within one panel.
 const HISTORY_SEASON_COUNT = 5
 
-function HistoryChart({ history, replacementValue, color }) {
-  const [hoveredSeason, setHoveredSeason] = useState(null)
+function HistoryChart({ history, replacementValue, projectedValue, color }) {
+  const [hoveredKey, setHoveredKey] = useState(null)
 
-  if (history.length === 0) {
+  const hasProjection = typeof projectedValue === 'number'
+
+  if (history.length === 0 && !hasProjection) {
     return <p className="draft-detail-history-empty">No season history available.</p>
   }
 
@@ -113,23 +115,34 @@ function HistoryChart({ history, replacementValue, color }) {
   // gold produces full history on purpose (see chat), so "how many
   // seasons to show" is entirely a presentation decision made here, not
   // baked into the query.
-  const sorted = [...history]
+  const sortedHistory = [...history]
     .sort((a, b) => b.season - a.season)
     .slice(0, HISTORY_SEASON_COUNT)
     .sort((a, b) => a.season - b.season)
+
+  // Upcoming-season projection is deliberately NOT a fact record (see
+  // chat) - it's a forward-looking estimate, not an observed season, and
+  // it's already sitting on the row from fact_draft_scores with no extra
+  // data plumbing needed. Rendered as its own trailing point with a
+  // dashed connector, kept visually distinct from real history.
+  const points = [
+    ...sortedHistory.map((h) => ({ key: `s${h.season}`, label: String(h.season), value: h.fpts_pg, isProjection: false })),
+    ...(hasProjection ? [{ key: 'proj', label: 'Proj', value: projectedValue, isProjection: true }] : []),
+  ]
 
   const width = 420
   const height = 150
   const padding = 20
 
   const scaleX = (i) =>
-    padding + (sorted.length === 1 ? 0 : (i / (sorted.length - 1)) * (width - padding * 2))
+    padding + (points.length === 1 ? 0 : (i / (points.length - 1)) * (width - padding * 2))
   const scaleY = (v) =>
     height - padding - (Math.min(v, CHART_MAX_PPG) / CHART_MAX_PPG) * (height - padding * 2)
 
-  const linePoints = sorted.map((h, i) => `${scaleX(i)},${scaleY(h.fpts_pg)}`).join(' ')
+  const historyLinePoints = sortedHistory.map((h, i) => `${scaleX(i)},${scaleY(h.fpts_pg)}`).join(' ')
   const replacementY = scaleY(replacementValue)
-  const hovered = sorted.find((h) => h.season === hoveredSeason)
+  const hoveredIndex = points.findIndex((p) => p.key === hoveredKey)
+  const hovered = points[hoveredIndex]
 
   return (
     <svg
@@ -145,55 +158,55 @@ function HistoryChart({ history, replacementValue, color }) {
         y2={replacementY}
       />
 
-      {/* Light halo behind the line/dots so they stay visible regardless
-          of how dark a given team's color is - some team colors (navy,
-          black, dark green) have very little contrast against a dark
-          background on their own. */}
-      <polyline className="draft-detail-history-line-halo" points={linePoints} />
-      <polyline className="draft-detail-history-line" style={{ stroke: color }} points={linePoints} />
+      {/* Light halo behind the line so it stays visible regardless of how
+          dark a given team's color is - some team colors (navy, black,
+          dark green) have very little contrast against a dark background
+          on their own. */}
+      <polyline className="draft-detail-history-line-halo" points={historyLinePoints} />
+      <polyline className="draft-detail-history-line" style={{ stroke: color }} points={historyLinePoints} />
 
-      {sorted.map((h, i) => (
-        <g key={h.season}>
+      {hasProjection && sortedHistory.length > 0 && (
+        <line
+          className="draft-detail-history-projection-line"
+          style={{ stroke: color }}
+          x1={scaleX(sortedHistory.length - 1)}
+          y1={scaleY(sortedHistory[sortedHistory.length - 1].fpts_pg)}
+          x2={scaleX(points.length - 1)}
+          y2={scaleY(projectedValue)}
+        />
+      )}
+
+      {points.map((p, i) => (
+        <g key={p.key}>
           <circle
             className="draft-detail-history-dot-halo"
             cx={scaleX(i)}
-            cy={scaleY(h.fpts_pg)}
+            cy={scaleY(p.value)}
             r={5}
           />
           <circle
-            className="draft-detail-history-dot"
-            style={{ fill: color }}
+            className={p.isProjection ? 'draft-detail-history-dot-projection' : 'draft-detail-history-dot'}
+            style={p.isProjection ? { stroke: color } : { fill: color }}
             cx={scaleX(i)}
-            cy={scaleY(h.fpts_pg)}
+            cy={scaleY(p.value)}
             r={3.5}
-            onMouseEnter={() => setHoveredSeason(h.season)}
-            onMouseLeave={() => setHoveredSeason((prev) => (prev === h.season ? null : prev))}
+            onMouseEnter={() => setHoveredKey(p.key)}
+            onMouseLeave={() => setHoveredKey((prev) => (prev === p.key ? null : prev))}
           />
         </g>
       ))}
 
-      {sorted.map((h, i) => (
-        <text
-          key={`label-${h.season}`}
-          className="draft-detail-history-axis-label"
-          x={scaleX(i)}
-          y={height - 4}
-        >
-          {h.season}
+      {points.map((p, i) => (
+        <text key={`label-${p.key}`} className="draft-detail-history-axis-label" x={scaleX(i)} y={height - 4}>
+          {p.label}
         </text>
       ))}
 
       {hovered && (
         <g className="draft-detail-history-tooltip">
-          <rect
-            x={scaleX(sorted.indexOf(hovered)) - 18}
-            y={scaleY(hovered.fpts_pg) - 24}
-            width={36}
-            height={16}
-            rx={3}
-          />
-          <text x={scaleX(sorted.indexOf(hovered))} y={scaleY(hovered.fpts_pg) - 12}>
-            {fixed2(hovered.fpts_pg)}
+          <rect x={scaleX(hoveredIndex) - 18} y={scaleY(hovered.value) - 24} width={36} height={16} rx={3} />
+          <text x={scaleX(hoveredIndex)} y={scaleY(hovered.value) - 12}>
+            {fixed2(hovered.value)}
           </text>
         </g>
       )}
@@ -231,8 +244,9 @@ function PlayerDetailPanel({ row, history }) {
             className={`draft-detail-bar-value ${
               isAboveReplacement ? 'draft-detail-bar-value-positive' : 'draft-detail-bar-value-negative'
             }`}
+            title={`${fixed2(row.proj_fpts_pg)} ${isAboveReplacement ? 'above' : 'below'} replacement`}
           >
-            {fixed2(row.proj_fpts_pg)}
+            {isAboveReplacement ? '+' : '−'}
           </span>
         </div>
 
@@ -240,7 +254,12 @@ function PlayerDetailPanel({ row, history }) {
           <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
         </p>
 
-        <HistoryChart history={history} replacementValue={row.r_fpts_pg} color={barColor} />
+        <HistoryChart
+          history={history}
+          replacementValue={row.r_fpts_pg}
+          projectedValue={row.proj_fpts_pg}
+          color={barColor}
+        />
       </div>
     </div>
   )

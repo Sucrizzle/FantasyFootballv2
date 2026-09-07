@@ -145,11 +145,6 @@
 .draft-detail-bar-fill {
   height: 100%;
   border-radius: 4px;
-  /* Fixed light halo, not theme-adaptive - same reasoning as the history
-     chart's line/dot halos: some team colors (navy, black, dark green)
-     have little contrast against a dark track on their own. box-shadow
-     rather than border so it doesn't affect the element's box/layout. */
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
 }
 
 .draft-detail-bar-goal {
@@ -225,11 +220,23 @@
   stroke-linejoin: round;
 }
 
+.draft-detail-history-projection-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+
 .draft-detail-history-dot-halo {
   fill: rgba(255, 255, 255, 0.55);
 }
 
 .draft-detail-history-dot {
+  cursor: pointer;
+}
+
+.draft-detail-history-dot-projection {
+  fill: var(--bg);
+  stroke-width: 2;
   cursor: pointer;
 }
 
