@@ -54,6 +54,7 @@ Deploy notes:
       DraftBoard query files" step.
 """
 
+import decimal
 import json
 import logging
 import os
@@ -100,7 +101,17 @@ def handler(event, context):
         rel = con.sql(select_sql)
         columns = rel.columns
         rows = rel.fetchall()
-        results = [dict(zip(columns, row)) for row in rows]
+        # DuckDB DECIMAL columns (proj_fpts_pg, r_fpts_pg, draft_score -
+        # anything cast via try_cast(... as decimal(...))) come back as
+        # Python decimal.Decimal, which json.dumps can't serialize
+        # natively - without this, _response's default=str fallback would
+        # silently stringify them (e.g. "1.23" instead of 1.23), which
+        # breaks numeric sorting client-side even though the value looks
+        # fine at a glance.
+        results = [
+            {col: (float(val) if isinstance(val, decimal.Decimal) else val) for col, val in zip(columns, row)}
+            for row in rows
+        ]
 
         return _response(200, results)
     except Exception as e:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import './DraftBoardPage.css'
 
@@ -18,12 +18,64 @@ const COLUMNS = [
   { key: 'draft_score', label: 'Draft Score' },
 ]
 
+// Standard "dropdown that expands into checkboxes" pattern - a native
+// <select multiple> would technically be a multi-select, but it renders
+// as an always-open list box, not a collapsed dropdown, so it doesn't
+// really match what was asked for.
+function PositionFilter({ allPositions, selectedPositions, onToggle }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const effectiveSelected = selectedPositions ?? allPositions
+  const label =
+    effectiveSelected.length === allPositions.length
+      ? 'All Positions'
+      : effectiveSelected.length === 0
+        ? 'No Positions'
+        : effectiveSelected.join(', ')
+
+  return (
+    <div className="draft-board-position-filter" ref={containerRef}>
+      <button type="button" onClick={() => setIsOpen((prev) => !prev)}>
+        {label} ▾
+      </button>
+      {isOpen && (
+        <div className="draft-board-position-filter-menu">
+          {allPositions.map((pos) => (
+            <label key={pos}>
+              <input
+                type="checkbox"
+                checked={effectiveSelected.includes(pos)}
+                onChange={() => onToggle(pos)}
+              />
+              {pos}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function DraftBoardPage() {
   const [rows, setRows] = useState([])
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
   const [message, setMessage] = useState('')
   const [sortKey, setSortKey] = useState('draft_score')
   const [sortDir, setSortDir] = useState('desc') // asc | desc
+  // null = "no filter applied yet" (show everything) - distinct from an
+  // empty array, which would mean "user deselected every position."
+  const [selectedPositions, setSelectedPositions] = useState(null)
 
   useEffect(() => {
     ;(async () => {
@@ -60,7 +112,21 @@ export default function DraftBoardPage() {
     }
   }
 
-  const sortedRows = [...rows].sort((a, b) => {
+  // Built from whatever the data actually contains, not hardcoded - stays
+  // correct as more positions get added without a code change here.
+  const allPositions = [...new Set(rows.map((r) => r.pos))].sort()
+
+  function togglePosition(pos) {
+    setSelectedPositions((prev) => {
+      const current = prev ?? allPositions
+      return current.includes(pos) ? current.filter((p) => p !== pos) : [...current, pos]
+    })
+  }
+
+  const filteredRows =
+    selectedPositions === null ? rows : rows.filter((r) => selectedPositions.includes(r.pos))
+
+  const sortedRows = [...filteredRows].sort((a, b) => {
     const av = a[sortKey]
     const bv = b[sortKey]
     if (av == null) return 1
@@ -75,6 +141,14 @@ export default function DraftBoardPage() {
 
       {loadStatus === 'loading' && <p>Loading…</p>}
       {loadStatus === 'error' && <p className="draft-board-status-error">{message}</p>}
+
+      {loadStatus === 'ready' && (
+        <PositionFilter
+          allPositions={allPositions}
+          selectedPositions={selectedPositions}
+          onToggle={togglePosition}
+        />
+      )}
 
       {loadStatus === 'ready' && (
         <table className="draft-board-table">

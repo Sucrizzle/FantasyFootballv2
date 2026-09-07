@@ -36,3 +36,32 @@
 .draft-board-status-error {
   color: var(--error);
 }
+
+.draft-board-position-filter {
+  position: relative;
+  display: inline-block;
+  margin-top: 1rem;
+}
+
+.draft-board-position-filter-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  margin-top: 0.25rem;
+  padding: 0.5rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.draft-board-position-filter-menu label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
