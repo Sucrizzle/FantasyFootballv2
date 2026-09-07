@@ -110,6 +110,22 @@ def _validate_teams(body: dict) -> tuple[dict | None, str | None]:
     return {"teams": teams}, None
 
 
+def _validate_draft_order(body: dict) -> tuple[dict | None, str | None]:
+    draft_type = body.get("draft_type")
+    if draft_type not in ("snake", "round_robin"):
+        return None, "`draft_type` must be 'snake' or 'round_robin'."
+
+    team_order = body.get("team_order")
+    if not isinstance(team_order, list):
+        return None, "`team_order` must be a list."
+
+    current_teams = _read_config("teams").get("teams", [])
+    if sorted(team_order) != sorted(current_teams):
+        return None, "`team_order` must contain exactly the teams in the current Teams config, each once."
+
+    return {"draft_type": draft_type, "team_order": team_order}, None
+
+
 def _validate_roster_positions(body: dict) -> tuple[dict | None, str | None]:
     slots = body.get("slots")
     if not isinstance(slots, list) or not slots:
@@ -147,6 +163,25 @@ CONFIG_REGISTRY = {
         # separate number - this list IS the source of truth for both the
         # roster of teams the draft board needs and how many there are.
         "default": {"teams": []},
+    },
+    "my_team": {
+        "validate": _validate_my_team,
+        # Which entry in `teams` is the app's own user - MVP1 is
+        # single-user (see docs/project-summary.md), so this is a single
+        # value, not a per-user mapping. Validated against the current
+        # `teams` config rather than accepted as an arbitrary string, so
+        # it can't silently drift from an actual team in the league.
+        "default": {"team_name": None},
+    },
+    "draft_order": {
+        "validate": _validate_draft_order,
+        # team_order is round-1 order regardless of draft_type - "snake"
+        # means the order reverses each subsequent round, "round_robin"
+        # means every round uses this same order. Whatever computes "picks
+        # until my next turn" needs both draft_type and team_order plus
+        # the current pick number - deliberately not stored here, since
+        # that's live draft state, not config.
+        "default": {"draft_type": "snake", "team_order": []},
     },
     "roster_positions": {
         "validate": _validate_roster_positions,
@@ -200,15 +235,32 @@ def _config_key(name: str) -> str:
     return f"config/{name}.json"
 
 
-def _handle_get(name: str) -> dict:
+def _read_config(name: str) -> dict:
+    """Reads a named config's current value, falling back to its registry
+    default if nothing's been saved yet. Shared by _handle_get and any
+    validator that needs to check against another config's value (e.g.
+    my_team needing the current `teams` list)."""
     try:
         obj = s3.get_object(Bucket=BUCKET_NAME, Key=_config_key(name))
-        return _response(200, json.loads(obj["Body"].read()))
+        return json.loads(obj["Body"].read())
     except s3.exceptions.NoSuchKey:
-        # Nothing saved yet (first run, before any admin save) - the
-        # registry's default, not an error, so the admin UI has something
-        # sane to render a form around.
-        return _response(200, CONFIG_REGISTRY[name]["default"])
+        return CONFIG_REGISTRY[name]["default"]
+
+
+def _validate_my_team(body: dict) -> tuple[dict | None, str | None]:
+    team_name = body.get("team_name")
+    if not isinstance(team_name, str) or not team_name.strip():
+        return None, "`team_name` must be a non-empty string."
+
+    current_teams = _read_config("teams").get("teams", [])
+    if team_name not in current_teams:
+        return None, f"'{team_name}' isn't in the current teams list - add it under the Teams config first."
+
+    return {"team_name": team_name}, None
+
+
+def _handle_get(name: str) -> dict:
+    return _response(200, _read_config(name))
 
 
 def _handle_put(name: str, event: dict) -> dict:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import './ConfigPage.css'
 
@@ -9,6 +9,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const SCORING_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/scoring` : null
 const TEAMS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/teams` : null
 const ROSTER_POSITIONS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
+const MY_TEAM_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : null
+const DRAFT_ORDER_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/draft_order` : null
 
 async function authHeaders() {
   const session = await fetchAuthSession()
@@ -232,6 +234,248 @@ function TeamsPanel() {
   )
 }
 
+function MyTeamPanel() {
+  const [teams, setTeams] = useState([])
+  const [myTeam, setMyTeam] = useState('')
+  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+  const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    if (!TEAMS_API_URL || !MY_TEAM_API_URL) {
+      setLoadStatus('error')
+      setMessage('VITE_API_BASE_URL is not configured yet.')
+      return
+    }
+
+    ;(async () => {
+      try {
+        const headers = await authHeaders()
+        const [teamsRes, myTeamRes] = await Promise.all([
+          fetch(TEAMS_API_URL, { headers }),
+          fetch(MY_TEAM_API_URL, { headers }),
+        ])
+        const teamsBody = await teamsRes.json()
+        const myTeamBody = await myTeamRes.json()
+        if (!teamsRes.ok) throw new Error(teamsBody.error || `Request failed with status ${teamsRes.status}`)
+        if (!myTeamRes.ok) throw new Error(myTeamBody.error || `Request failed with status ${myTeamRes.status}`)
+
+        setTeams(teamsBody.teams || [])
+        setMyTeam(myTeamBody.team_name || '')
+        setLoadStatus('ready')
+      } catch (err) {
+        setLoadStatus('error')
+        setMessage(err.message)
+      }
+    })()
+  }, [])
+
+  async function save() {
+    if (!MY_TEAM_API_URL) return
+
+    setSaveStatus('saving')
+    setMessage('')
+
+    try {
+      const res = await fetch(MY_TEAM_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ team_name: myTeam }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+
+      setSaveStatus('success')
+      setMessage(body.message || 'My team saved.')
+    } catch (err) {
+      setSaveStatus('error')
+      setMessage(err.message)
+    }
+  }
+
+  if (loadStatus === 'loading') return <p>Loading…</p>
+
+  return (
+    <section className="config-panel">
+      <h3>My Team</h3>
+      <p className="config-panel-description">
+        Which team in the Teams list is yours - drives which roster the
+        draft board tracks for positional need.
+      </p>
+
+      {teams.length === 0 ? (
+        <p className="config-panel-description">Add teams under the Teams config first.</p>
+      ) : (
+        <div className="config-form-row">
+          <label>
+            Team
+            <select value={myTeam} onChange={(e) => setMyTeam(e.target.value)}>
+              <option value="" disabled>Select a team…</option>
+              {teams.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      <div className="config-panel-actions">
+        <button onClick={save} disabled={saveStatus === 'saving' || !myTeam}>
+          {saveStatus === 'saving' ? 'Saving…' : 'Save My Team'}
+        </button>
+      </div>
+
+      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
+      {(saveStatus === 'error' || loadStatus === 'error') && (
+        <p className="config-status config-status-error">{message}</p>
+      )}
+    </section>
+  )
+}
+
+function DraftOrderPanel() {
+  const [draftType, setDraftType] = useState('snake')
+  const [teamOrder, setTeamOrder] = useState([])
+  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+  const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
+  const [message, setMessage] = useState('')
+  const dragIndex = useRef(null)
+
+  useEffect(() => {
+    if (!TEAMS_API_URL || !DRAFT_ORDER_API_URL) {
+      setLoadStatus('error')
+      setMessage('VITE_API_BASE_URL is not configured yet.')
+      return
+    }
+
+    ;(async () => {
+      try {
+        const headers = await authHeaders()
+        const [teamsRes, draftOrderRes] = await Promise.all([
+          fetch(TEAMS_API_URL, { headers }),
+          fetch(DRAFT_ORDER_API_URL, { headers }),
+        ])
+        const teamsBody = await teamsRes.json()
+        const draftOrderBody = await draftOrderRes.json()
+        if (!teamsRes.ok) throw new Error(teamsBody.error || `Request failed with status ${teamsRes.status}`)
+        if (!draftOrderRes.ok) throw new Error(draftOrderBody.error || `Request failed with status ${draftOrderRes.status}`)
+
+        const currentTeams = teamsBody.teams || []
+        const savedOrder = draftOrderBody.team_order || []
+        // Saved order might be stale (a team got added/removed/renamed
+        // since it was last saved) - fall back to teams' own order rather
+        // than showing a list that no longer matches, which the backend
+        // would reject on save anyway.
+        const isValid =
+          savedOrder.length === currentTeams.length &&
+          [...savedOrder].sort().join() === [...currentTeams].sort().join()
+
+        setTeamOrder(isValid ? savedOrder : currentTeams)
+        setDraftType(draftOrderBody.draft_type || 'snake')
+        setLoadStatus('ready')
+      } catch (err) {
+        setLoadStatus('error')
+        setMessage(err.message)
+      }
+    })()
+  }, [])
+
+  function handleDragStart(index) {
+    dragIndex.current = index
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault()
+  }
+
+  function handleDrop(index) {
+    setTeamOrder((prev) => {
+      const next = [...prev]
+      const [moved] = next.splice(dragIndex.current, 1)
+      next.splice(index, 0, moved)
+      return next
+    })
+    dragIndex.current = null
+  }
+
+  async function save() {
+    if (!DRAFT_ORDER_API_URL) return
+
+    setSaveStatus('saving')
+    setMessage('')
+
+    try {
+      const res = await fetch(DRAFT_ORDER_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ draft_type: draftType, team_order: teamOrder }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+
+      setSaveStatus('success')
+      setMessage(body.message || 'Draft order saved.')
+    } catch (err) {
+      setSaveStatus('error')
+      setMessage(err.message)
+    }
+  }
+
+  if (loadStatus === 'loading') return <p>Loading…</p>
+
+  return (
+    <section className="config-panel">
+      <h3>Draft Order</h3>
+      <p className="config-panel-description">
+        Round-1 pick order, drag to reorder. Snake reverses the order each
+        subsequent round; round robin repeats this same order every round.
+      </p>
+
+      {teamOrder.length === 0 ? (
+        <p className="config-panel-description">Add teams under the Teams config first.</p>
+      ) : (
+        <>
+          <div className="config-form-row">
+            <label>
+              Draft Type
+              <select value={draftType} onChange={(e) => setDraftType(e.target.value)}>
+                <option value="snake">Snake</option>
+                <option value="round_robin">Round Robin</option>
+              </select>
+            </label>
+          </div>
+
+          <ol className="config-draft-order-list">
+            {teamOrder.map((name, i) => (
+              <li
+                key={name}
+                draggable
+                onDragStart={() => handleDragStart(i)}
+                onDragOver={handleDragOver}
+                onDrop={() => handleDrop(i)}
+              >
+                <span className="config-drag-handle">⠿</span>
+                {name}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+
+      <div className="config-panel-actions">
+        <button onClick={save} disabled={saveStatus === 'saving' || teamOrder.length === 0}>
+          {saveStatus === 'saving' ? 'Saving…' : 'Save Draft Order'}
+        </button>
+      </div>
+
+      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
+      {(saveStatus === 'error' || loadStatus === 'error') && (
+        <p className="config-status config-status-error">{message}</p>
+      )}
+    </section>
+  )
+}
+
 // FLEX/SUPERFLEX aren't special cases - they're just a slot whose
 // eligible_positions list has more than one entry (e.g. FLEX ->
 // "RB,WR,TE", SUPERFLEX -> "QB,RB,WR,TE"). Entered here as a plain
@@ -364,13 +608,37 @@ function RosterPositionsPanel() {
   )
 }
 
+const TABS = [
+  { key: 'scoring', label: 'Scoring', Panel: ScoringPanel },
+  { key: 'teams', label: 'Teams', Panel: TeamsPanel },
+  { key: 'my-team', label: 'My Team', Panel: MyTeamPanel },
+  { key: 'draft-order', label: 'Draft Order', Panel: DraftOrderPanel },
+  { key: 'roster-positions', label: 'Roster Positions', Panel: RosterPositionsPanel },
+]
+
 export default function ConfigPage() {
+  const [activeTab, setActiveTab] = useState(TABS[0].key)
+  const ActivePanel = TABS.find((t) => t.key === activeTab).Panel
+
   return (
     <div className="config-page">
       <h2>Config</h2>
-      <ScoringPanel />
-      <TeamsPanel />
-      <RosterPositionsPanel />
+
+      <div className="config-tabs" role="tablist">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            className={activeTab === tab.key ? 'active' : ''}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <ActivePanel />
     </div>
   )
 }
