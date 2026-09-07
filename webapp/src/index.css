@@ -67,6 +67,17 @@ body {
   margin: 0;
 }
 
+/* Global, not per-page, so every disabled button (Pipeline's run
+   buttons, Config's Save/Cancel, anything added later) reads as clearly
+   non-interactive without relying on each browser's own default disabled
+   look, which varies and can be subtle. Opacity/cursor rather than a
+   color, so this doesn't need revisiting whenever the color scheme
+   changes. */
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 #root {
   width: 1126px;
   max-width: 100%;

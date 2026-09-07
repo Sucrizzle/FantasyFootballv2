@@ -404,6 +404,7 @@ function DraftSetupPanel({ teams, initialMyTeam, initialDraftType, initialTeamOr
             <ol className="config-draft-order-list">
               {teamOrder.map((name, i) => (
                 <li key={name} ref={(el) => { itemRefs.current[name] = el }} className="config-draft-order-row">
+                  <span className="config-draft-position">{i + 1}.</span>
                   <div
                     draggable
                     className={[
@@ -418,7 +419,6 @@ function DraftSetupPanel({ teams, initialMyTeam, initialDraftType, initialTeamOr
                     <span className="config-drag-handle">⠿</span>
                     {name}
                   </div>
-                  <span className="config-draft-position">{i + 1}.</span>
                 </li>
               ))}
             </ol>
