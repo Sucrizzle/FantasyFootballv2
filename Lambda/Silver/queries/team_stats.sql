@@ -137,4 +137,4 @@ select
 , ts.pt_return_yards
 , ts.pt_return_tds
 , ts.pt_net_yards
-FROM read_parquet('BUCKET_PLACEHOLDER/bronze/team_stats/season=*/team_stats.parquet', union_by_name = true) ts
+FROM read_parquet('${bucket}/bronze/team_stats/season=*/team_stats.parquet', union_by_name = true) ts

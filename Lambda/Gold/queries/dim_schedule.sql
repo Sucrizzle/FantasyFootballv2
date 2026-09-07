@@ -11,5 +11,5 @@ select
 , bool_or( s.location= 'Neutral') as is_neutral_location
 , s.away_team
 , s.home_team
-FROM read_parquet('BUCKET_PLACEHOLDER/silver/schedules/schedules.parquet', union_by_name = true) s
+FROM read_parquet('${bucket}/silver/schedules/schedules.parquet', union_by_name = true) s
 group by all

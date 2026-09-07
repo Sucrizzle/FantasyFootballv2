@@ -11,9 +11,9 @@ select
 , try_cast(points_away / sum(case when ftsw.team_category = 'Away' and not ds.is_neutral_location then 1 else 0 end) as decimal(10,2)) as points_away_per_game
 , sum(case when ds.is_neutral_location = 'Y' then ftsw.score end) as points_neutral
 , try_cast(points_neutral / sum(case when ds.is_neutral_location then 1 else 0 end) as decimal(10,2)) as points_neutral_per_game
-FROM read_parquet('BUCKET_PLACEHOLDER/gold/facts/fact_team_stats_weekly.parquet', union_by_name = true) ftsw
-join read_parquet('BUCKET_PLACEHOLDER/gold/dimensions/dim_schedule.parquet', union_by_name = true) ds
+FROM read_parquet('${bucket}/gold/facts/fact_team_stats_weekly.parquet', union_by_name = true) ftsw
+join read_parquet('${bucket}/gold/dimensions/dim_schedule.parquet', union_by_name = true) ds
   on ftsw.game_id = ds.game_id
-join read_parquet('BUCKET_PLACEHOLDER/gold/dimensions/dim_calendar.parquet', union_by_name = true) dc
+join read_parquet('${bucket}/gold/dimensions/dim_calendar.parquet', union_by_name = true) dc
   on ds.week_id = dc.week_id
 group by 1,2,3

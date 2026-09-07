@@ -5,7 +5,7 @@ select
 , s.game_type
 , min(gameday) as first_of_week
 , max(gameday) as last_of_week
-FROM read_parquet('BUCKET_PLACEHOLDER/silver/schedules/schedules.parquet', union_by_name = true) s
+FROM read_parquet('${bucket}/silver/schedules/schedules.parquet', union_by_name = true) s
 group by 
   s.season
 , s.week

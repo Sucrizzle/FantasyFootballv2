@@ -24,9 +24,13 @@ Manifest shape (see Lambda/Silver/queries/manifest.json for the real one):
 
 Each query file is a plain SELECT (no COPY wrapper) - this runner wraps it
 in `COPY (<query>) TO '<output_path>' (FORMAT PARQUET)` itself, using the
-manifest's output_path. Query files use the same BUCKET_PLACEHOLDER
-convention as before for the bucket URI, substituted at runtime so the same
-files work unchanged across dev/prod.
+manifest's output_path. Query files use the same ${bucket} convention as
+before for the bucket URI, substituted at runtime so the same files work
+unchanged across dev/prod. `${bucket}` (not a bare token like
+BUCKET_PLACEHOLDER) specifically so DBeaver's own `${varname}` variable
+substitution recognizes it too - a query can be pasted into DBeaver and
+run directly against a real bucket (via `@set bucket s3://...` or
+DBeaver's Variables panel) without hand-editing the path first.
 
 Matches this project's medallion definition (see docs/project-summary.md):
 pure technical cleansing per source - standardizes column values (team
@@ -200,7 +204,7 @@ def _load_query(query_file: str) -> str:
 
 def _run_entry(con: duckdb.DuckDBPyConnection, entry: dict) -> None:
     bucket_uri = f"s3://{BUCKET_NAME}"
-    select_sql = _load_query(entry["query_file"]).replace("BUCKET_PLACEHOLDER", bucket_uri)
+    select_sql = _load_query(entry["query_file"]).replace("${bucket}", bucket_uri)
     output_uri = f"{bucket_uri}/{entry['output_path']}"
     con.sql(f"COPY ({select_sql}) TO '{output_uri}' (FORMAT PARQUET);")
     log.info(f"[{entry['name']}] wrote {output_uri}")

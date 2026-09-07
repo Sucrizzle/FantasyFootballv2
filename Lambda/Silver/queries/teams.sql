@@ -16,4 +16,4 @@ select
 , t.team_conference_logo
 , t.team_league_logo
 , t.team_logo_squared
-FROM read_parquet('BUCKET_PLACEHOLDER/bronze/teams/teams.parquet', union_by_name = true) t
+FROM read_parquet('${bucket}/bronze/teams/teams.parquet', union_by_name = true) t

@@ -17,10 +17,10 @@ with weekly as (
   , COALESCE(dp.pick, r.draft_number) as draft_pick
   , dp.allpro as allpro_selections
   , dp.probowls as probowl_selections
-  from read_parquet('BUCKET_PLACEHOLDER/silver/rosters/rosters.parquet', union_by_name = true) r
-  left outer join read_parquet('BUCKET_PLACEHOLDER/silver/draft_picks/draft_picks.parquet', union_by_name = true) dp
+  from read_parquet('${bucket}/silver/rosters/rosters.parquet', union_by_name = true) r
+  left outer join read_parquet('${bucket}/silver/draft_picks/draft_picks.parquet', union_by_name = true) dp
     on r.gsis_id = dp.gsis_id
-  join read_parquet('BUCKET_PLACEHOLDER/gold/dimensions/dim_calendar.parquet') dc
+  join read_parquet('${bucket}/gold/dimensions/dim_calendar.parquet') dc
     on r.season = dc.season and r.week = dc.week and r.game_type = dc.game_type
   where COALESCE(r.gsis_id,'') <> ''
 ),
