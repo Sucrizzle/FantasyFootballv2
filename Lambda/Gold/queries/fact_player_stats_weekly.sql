@@ -29,7 +29,6 @@ with raw_stats as
 	  on ws.season = s.season
 	  and ws.week = s.week
 	  and (ws.team = s.home_team or ws.team = s.away_team)
-	where ws.position in ('TE')
 ),
 
 scoring_config as (
