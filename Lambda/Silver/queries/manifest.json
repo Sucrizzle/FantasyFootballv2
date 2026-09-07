@@ -6,5 +6,6 @@
   { "name": "draft_picks", "query_file": "draft_picks.sql", "output_path": "silver/draft_picks/draft_picks.parquet" },
   { "name": "weekly_stats", "query_file": "weekly_stats.sql", "output_path": "silver/weekly_stats/weekly_stats.parquet" },
   { "name": "teams", "query_file": "teams.sql", "output_path": "silver/teams/teams.parquet" },
-  { "name": "team_stats", "query_file": "team_stats.sql", "output_path": "silver/team_stats/team_stats.parquet" }
+  { "name": "team_stats", "query_file": "team_stats.sql", "output_path": "silver/team_stats/team_stats.parquet" },
+  { "name": "adp", "query_file": "adp.sql", "output_path": "silver/adp/adp.parquet" }
 ]
