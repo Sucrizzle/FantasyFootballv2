@@ -83,8 +83,17 @@
   cursor: grabbing;
 }
 
+.config-draft-order-list li.dragging {
+  opacity: 0.4;
+}
+
 .config-drag-handle {
   color: #999;
+}
+
+.config-draft-position {
+  color: #999;
+  min-width: 1.5rem;
 }
 
 .config-panel-actions {

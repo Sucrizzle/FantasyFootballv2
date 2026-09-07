@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import './ConfigPage.css'
 
@@ -249,26 +249,65 @@ function MyTeamPanel({ teams, initialMyTeam }) {
 function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
   const [draftType, setDraftType] = useState(initialDraftType)
   const [teamOrder, setTeamOrder] = useState(initialTeamOrder)
+  const [draggingName, setDraggingName] = useState(null)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
-  const dragIndex = useRef(null)
 
-  function handleDragStart(index) {
-    dragIndex.current = index
+  // FLIP animation (First-Last-Invert-Play): measure each row's position
+  // before a reorder, let React re-render in the new order, then animate
+  // from the old position to the new one. Measuring actual rendered
+  // positions (rather than assuming a fixed row height) means this stays
+  // correct regardless of font size/theme/content changes.
+  const itemRefs = useRef({}) // team name -> DOM node
+  const prevTops = useRef({}) // team name -> last measured top, for the animation below
+
+  function capturePositions() {
+    const positions = {}
+    for (const name in itemRefs.current) {
+      const node = itemRefs.current[name]
+      if (node) positions[name] = node.getBoundingClientRect().top
+    }
+    return positions
   }
 
-  function handleDragOver(e) {
+  useLayoutEffect(() => {
+    const newTops = capturePositions()
+    for (const name in newTops) {
+      const prevTop = prevTops.current[name]
+      const newTop = newTops[name]
+      const node = itemRefs.current[name]
+      if (node && prevTop != null && prevTop !== newTop) {
+        // Jump it back to where it visually was (no transition), then let
+        // the browser paint that, then animate to the real position - the
+        // classic FLIP "invert, then play" step.
+        node.style.transition = 'none'
+        node.style.transform = `translateY(${prevTop - newTop}px)`
+        requestAnimationFrame(() => {
+          node.style.transition = 'transform 150ms ease'
+          node.style.transform = ''
+        })
+      }
+    }
+    prevTops.current = newTops
+  }, [teamOrder])
+
+  // Reorders live, on every drag-over of a different team, rather than
+  // only on drop - that's what makes the other rows visibly slide out of
+  // the way while dragging instead of just snapping at the end.
+  function handleDragOver(e, overName) {
     e.preventDefault()
-  }
+    if (overName === draggingName) return
 
-  function handleDrop(index) {
+    prevTops.current = capturePositions()
     setTeamOrder((prev) => {
+      const from = prev.indexOf(draggingName)
+      const to = prev.indexOf(overName)
+      if (from === -1 || to === -1 || from === to) return prev
       const next = [...prev]
-      const [moved] = next.splice(dragIndex.current, 1)
-      next.splice(index, 0, moved)
+      next.splice(from, 1)
+      next.splice(to, 0, draggingName)
       return next
     })
-    dragIndex.current = null
   }
 
   async function save() {
@@ -320,12 +359,15 @@ function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
             {teamOrder.map((name, i) => (
               <li
                 key={name}
+                ref={(el) => { itemRefs.current[name] = el }}
                 draggable
-                onDragStart={() => handleDragStart(i)}
-                onDragOver={handleDragOver}
-                onDrop={() => handleDrop(i)}
+                className={draggingName === name ? 'dragging' : ''}
+                onDragStart={() => setDraggingName(name)}
+                onDragOver={(e) => handleDragOver(e, name)}
+                onDragEnd={() => setDraggingName(null)}
               >
                 <span className="config-drag-handle">⠿</span>
+                <span className="config-draft-position">{i + 1}.</span>
                 {name}
               </li>
             ))}
