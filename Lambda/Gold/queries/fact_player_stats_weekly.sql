@@ -11,7 +11,7 @@ with raw_stats as
 	, ws.gsis_id
 	, ws.completions as comp
 	, ws.attempts as att
-	, try_cast((ws.completions / ws.attempts) * 100 as decimal(10,2)) as comp_pct
+	, try_cast((ws.completions / NULLIF(ws.attempts, 0)) * 100 as decimal(10,2)) as comp_pct
 	, ws.passing_yards as pass_yd
 	, ws.passing_tds as pass_td
 	, ws.passing_interceptions as int_thrown
@@ -49,7 +49,7 @@ categorized as (
 	    when u.category in ('pass_yd', 'pass_td', 'int_thrown') then 'passing'
 	    when u.category in ('rush_yd', 'rush_td') then 'rushing'
 	    when u.category in ('rec', 'rec_yd', 'rec_td') then 'receiving'
-	    when u.category in ('two_pt_conv','fumble_lost','off_fumble_ret') then 'other'
+	    when u.category in ('two_pt_conv','fumble_lost','off_fumble_ret_td') then 'other'
       else 'unknown'
     end as unit
   from unpivoted u
