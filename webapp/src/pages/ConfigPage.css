@@ -55,6 +55,7 @@
 
 .config-form-row input[type='text'] {
   flex: 1;
+  min-width: 0;
 }
 
 .config-form-row input[type='number'] {
