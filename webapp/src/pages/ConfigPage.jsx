@@ -7,7 +7,7 @@ import './ConfigPage.css'
 // the URL, not the Lambda/route it hits.
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const SCORING_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/scoring` : null
-const TEAM_SIZE_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/team_size` : null
+const TEAMS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/teams` : null
 
 async function authHeaders() {
   const session = await fetchAuthSession()
@@ -131,14 +131,14 @@ function ScoringPanel() {
   )
 }
 
-function TeamSizePanel() {
-  const [teamCount, setTeamCount] = useState(12)
+function TeamsPanel() {
+  const [teams, setTeams] = useState([])
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
 
   useEffect(() => {
-    if (!TEAM_SIZE_API_URL) {
+    if (!TEAMS_API_URL) {
       setLoadStatus('error')
       setMessage('VITE_API_BASE_URL is not configured yet.')
       return
@@ -146,10 +146,10 @@ function TeamSizePanel() {
 
     ;(async () => {
       try {
-        const res = await fetch(TEAM_SIZE_API_URL, { headers: await authHeaders() })
+        const res = await fetch(TEAMS_API_URL, { headers: await authHeaders() })
         const body = await res.json()
         if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-        setTeamCount(body.team_count ?? 12)
+        setTeams(body.teams || [])
         setLoadStatus('ready')
       } catch (err) {
         setLoadStatus('error')
@@ -158,23 +158,35 @@ function TeamSizePanel() {
     })()
   }, [])
 
+  function updateTeamName(index, name) {
+    setTeams((prev) => prev.map((t, i) => (i === index ? name : t)))
+  }
+
+  function removeRow(index) {
+    setTeams((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function addRow() {
+    setTeams((prev) => [...prev, ''])
+  }
+
   async function save() {
-    if (!TEAM_SIZE_API_URL) return
+    if (!TEAMS_API_URL) return
 
     setSaveStatus('saving')
     setMessage('')
 
     try {
-      const res = await fetch(TEAM_SIZE_API_URL, {
+      const res = await fetch(TEAMS_API_URL, {
         method: 'PUT',
         headers: await authHeaders(),
-        body: JSON.stringify({ team_count: Number(teamCount) }),
+        body: JSON.stringify({ teams }),
       })
       const body = await res.json()
       if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
 
       setSaveStatus('success')
-      setMessage(body.message || 'Team size saved.')
+      setMessage(body.message || 'Teams saved.')
     } catch (err) {
       setSaveStatus('error')
       setMessage(err.message)
@@ -185,25 +197,29 @@ function TeamSizePanel() {
 
   return (
     <section className="config-panel">
-      <h3>Team Size</h3>
-      <p className="config-panel-description">Number of teams in the league.</p>
+      <h3>Teams</h3>
+      <p className="config-panel-description">
+        League team names. League size is just however many teams are in
+        this list - there's no separate count to keep in sync.
+      </p>
 
-      <div className="config-form-row">
-        <label>
-          Team Count
+      {teams.map((name, i) => (
+        <div className="config-form-row" key={i}>
           <input
-            type="number"
-            min="2"
-            max="32"
-            value={teamCount}
-            onChange={(e) => setTeamCount(e.target.value)}
+            type="text"
+            placeholder="team name"
+            value={name}
+            onChange={(e) => updateTeamName(i, e.target.value)}
           />
-        </label>
-      </div>
+          <button type="button" onClick={() => removeRow(i)}>Remove</button>
+        </div>
+      ))}
+
+      <button type="button" onClick={addRow}>Add Team</button>
 
       <div className="config-panel-actions">
         <button onClick={save} disabled={saveStatus === 'saving'}>
-          {saveStatus === 'saving' ? 'Saving…' : 'Save Team Size'}
+          {saveStatus === 'saving' ? 'Saving…' : 'Save Teams'}
         </button>
       </div>
 
@@ -220,7 +236,7 @@ export default function ConfigPage() {
     <div className="config-page">
       <h2>Config</h2>
       <ScoringPanel />
-      <TeamSizePanel />
+      <TeamsPanel />
     </div>
   )
 }

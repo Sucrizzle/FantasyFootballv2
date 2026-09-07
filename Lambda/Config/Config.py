@@ -94,14 +94,20 @@ def _validate_scoring(body: dict) -> tuple[dict | None, str | None]:
     return {"categories": categories}, None
 
 
-def _validate_team_size(body: dict) -> tuple[dict | None, str | None]:
-    team_count = body.get("team_count")
-    if not isinstance(team_count, int) or isinstance(team_count, bool):
-        return None, "`team_count` must be an integer."
-    if not (2 <= team_count <= 32):
-        return None, "`team_count` must be between 2 and 32."
+def _validate_teams(body: dict) -> tuple[dict | None, str | None]:
+    teams = body.get("teams")
+    if not isinstance(teams, list) or not (2 <= len(teams) <= 32):
+        return None, "`teams` must be a list of between 2 and 32 team names."
 
-    return {"team_count": team_count}, None
+    seen = set()
+    for team_name in teams:
+        if not isinstance(team_name, str) or not team_name.strip():
+            return None, "Each team name must be a non-empty string."
+        if team_name in seen:
+            return None, f"Duplicate team name '{team_name}'."
+        seen.add(team_name)
+
+    return {"teams": teams}, None
 
 
 # Adding a new config type is just adding an entry here - `validate` checks
@@ -112,9 +118,12 @@ CONFIG_REGISTRY = {
         "validate": _validate_scoring,
         "default": {"categories": []},
     },
-    "team_size": {
-        "validate": _validate_team_size,
-        "default": {"team_count": 12},
+    "teams": {
+        "validate": _validate_teams,
+        # League size is derived from len(teams) rather than tracked as a
+        # separate number - this list IS the source of truth for both the
+        # roster of teams the draft board needs and how many there are.
+        "default": {"teams": []},
     },
 }
 
