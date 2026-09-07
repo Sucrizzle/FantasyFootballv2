@@ -21,32 +21,10 @@ async function authHeaders() {
   }
 }
 
-function ScoringPanel() {
-  const [categories, setCategories] = useState([])
-  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+function ScoringPanel({ initialCategories }) {
+  const [categories, setCategories] = useState(initialCategories)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    if (!SCORING_API_URL) {
-      setLoadStatus('error')
-      setMessage('VITE_API_BASE_URL is not configured yet.')
-      return
-    }
-
-    ;(async () => {
-      try {
-        const res = await fetch(SCORING_API_URL, { headers: await authHeaders() })
-        const body = await res.json()
-        if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-        setCategories(body.categories || [])
-        setLoadStatus('ready')
-      } catch (err) {
-        setLoadStatus('error')
-        setMessage(err.message)
-      }
-    })()
-  }, [])
 
   function updatePoints(index, points) {
     setCategories((prev) => prev.map((row, i) => (i === index ? { ...row, points } : row)))
@@ -88,8 +66,6 @@ function ScoringPanel() {
     }
   }
 
-  if (loadStatus === 'loading') return <p>Loading…</p>
-
   return (
     <section className="config-panel">
       <h3>Scoring</h3>
@@ -127,39 +103,15 @@ function ScoringPanel() {
       </div>
 
       {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {(saveStatus === 'error' || loadStatus === 'error') && (
-        <p className="config-status config-status-error">{message}</p>
-      )}
+      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
     </section>
   )
 }
 
-function TeamsPanel() {
-  const [teams, setTeams] = useState([])
-  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+function TeamsPanel({ initialTeams }) {
+  const [teams, setTeams] = useState(initialTeams)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    if (!TEAMS_API_URL) {
-      setLoadStatus('error')
-      setMessage('VITE_API_BASE_URL is not configured yet.')
-      return
-    }
-
-    ;(async () => {
-      try {
-        const res = await fetch(TEAMS_API_URL, { headers: await authHeaders() })
-        const body = await res.json()
-        if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-        setTeams(body.teams || [])
-        setLoadStatus('ready')
-      } catch (err) {
-        setLoadStatus('error')
-        setMessage(err.message)
-      }
-    })()
-  }, [])
 
   function updateTeamName(index, name) {
     setTeams((prev) => prev.map((t, i) => (i === index ? name : t)))
@@ -196,8 +148,6 @@ function TeamsPanel() {
     }
   }
 
-  if (loadStatus === 'loading') return <p>Loading…</p>
-
   return (
     <section className="config-panel">
       <h3>Teams</h3>
@@ -227,48 +177,15 @@ function TeamsPanel() {
       </div>
 
       {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {(saveStatus === 'error' || loadStatus === 'error') && (
-        <p className="config-status config-status-error">{message}</p>
-      )}
+      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
     </section>
   )
 }
 
-function MyTeamPanel() {
-  const [teams, setTeams] = useState([])
-  const [myTeam, setMyTeam] = useState('')
-  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+function MyTeamPanel({ teams, initialMyTeam }) {
+  const [myTeam, setMyTeam] = useState(initialMyTeam)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    if (!TEAMS_API_URL || !MY_TEAM_API_URL) {
-      setLoadStatus('error')
-      setMessage('VITE_API_BASE_URL is not configured yet.')
-      return
-    }
-
-    ;(async () => {
-      try {
-        const headers = await authHeaders()
-        const [teamsRes, myTeamRes] = await Promise.all([
-          fetch(TEAMS_API_URL, { headers }),
-          fetch(MY_TEAM_API_URL, { headers }),
-        ])
-        const teamsBody = await teamsRes.json()
-        const myTeamBody = await myTeamRes.json()
-        if (!teamsRes.ok) throw new Error(teamsBody.error || `Request failed with status ${teamsRes.status}`)
-        if (!myTeamRes.ok) throw new Error(myTeamBody.error || `Request failed with status ${myTeamRes.status}`)
-
-        setTeams(teamsBody.teams || [])
-        setMyTeam(myTeamBody.team_name || '')
-        setLoadStatus('ready')
-      } catch (err) {
-        setLoadStatus('error')
-        setMessage(err.message)
-      }
-    })()
-  }, [])
 
   async function save() {
     if (!MY_TEAM_API_URL) return
@@ -292,8 +209,6 @@ function MyTeamPanel() {
       setMessage(err.message)
     }
   }
-
-  if (loadStatus === 'loading') return <p>Loading…</p>
 
   return (
     <section className="config-panel">
@@ -326,59 +241,17 @@ function MyTeamPanel() {
       </div>
 
       {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {(saveStatus === 'error' || loadStatus === 'error') && (
-        <p className="config-status config-status-error">{message}</p>
-      )}
+      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
     </section>
   )
 }
 
-function DraftOrderPanel() {
-  const [draftType, setDraftType] = useState('snake')
-  const [teamOrder, setTeamOrder] = useState([])
-  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
+  const [draftType, setDraftType] = useState(initialDraftType)
+  const [teamOrder, setTeamOrder] = useState(initialTeamOrder)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
   const dragIndex = useRef(null)
-
-  useEffect(() => {
-    if (!TEAMS_API_URL || !DRAFT_ORDER_API_URL) {
-      setLoadStatus('error')
-      setMessage('VITE_API_BASE_URL is not configured yet.')
-      return
-    }
-
-    ;(async () => {
-      try {
-        const headers = await authHeaders()
-        const [teamsRes, draftOrderRes] = await Promise.all([
-          fetch(TEAMS_API_URL, { headers }),
-          fetch(DRAFT_ORDER_API_URL, { headers }),
-        ])
-        const teamsBody = await teamsRes.json()
-        const draftOrderBody = await draftOrderRes.json()
-        if (!teamsRes.ok) throw new Error(teamsBody.error || `Request failed with status ${teamsRes.status}`)
-        if (!draftOrderRes.ok) throw new Error(draftOrderBody.error || `Request failed with status ${draftOrderRes.status}`)
-
-        const currentTeams = teamsBody.teams || []
-        const savedOrder = draftOrderBody.team_order || []
-        // Saved order might be stale (a team got added/removed/renamed
-        // since it was last saved) - fall back to teams' own order rather
-        // than showing a list that no longer matches, which the backend
-        // would reject on save anyway.
-        const isValid =
-          savedOrder.length === currentTeams.length &&
-          [...savedOrder].sort().join() === [...currentTeams].sort().join()
-
-        setTeamOrder(isValid ? savedOrder : currentTeams)
-        setDraftType(draftOrderBody.draft_type || 'snake')
-        setLoadStatus('ready')
-      } catch (err) {
-        setLoadStatus('error')
-        setMessage(err.message)
-      }
-    })()
-  }, [])
 
   function handleDragStart(index) {
     dragIndex.current = index
@@ -420,8 +293,6 @@ function DraftOrderPanel() {
       setMessage(err.message)
     }
   }
-
-  if (loadStatus === 'loading') return <p>Loading…</p>
 
   return (
     <section className="config-panel">
@@ -469,9 +340,7 @@ function DraftOrderPanel() {
       </div>
 
       {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {(saveStatus === 'error' || loadStatus === 'error') && (
-        <p className="config-status config-status-error">{message}</p>
-      )}
+      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
     </section>
   )
 }
@@ -481,37 +350,10 @@ function DraftOrderPanel() {
 // "RB,WR,TE", SUPERFLEX -> "QB,RB,WR,TE"). Entered here as a plain
 // comma-separated string and split/joined on save/load rather than a
 // multi-select widget, to keep this simple for MVP1.
-function RosterPositionsPanel() {
-  const [slots, setSlots] = useState([])
-  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+function RosterPositionsPanel({ initialSlots }) {
+  const [slots, setSlots] = useState(initialSlots)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    if (!ROSTER_POSITIONS_API_URL) {
-      setLoadStatus('error')
-      setMessage('VITE_API_BASE_URL is not configured yet.')
-      return
-    }
-
-    ;(async () => {
-      try {
-        const res = await fetch(ROSTER_POSITIONS_API_URL, { headers: await authHeaders() })
-        const body = await res.json()
-        if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-        const loaded = (body.slots || []).map((s) => ({
-          slot_name: s.slot_name,
-          count: s.count,
-          eligible_positions: (s.eligible_positions || []).join(','),
-        }))
-        setSlots(loaded)
-        setLoadStatus('ready')
-      } catch (err) {
-        setLoadStatus('error')
-        setMessage(err.message)
-      }
-    })()
-  }, [])
 
   function updateSlot(index, field, value) {
     setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)))
@@ -556,8 +398,6 @@ function RosterPositionsPanel() {
     }
   }
 
-  if (loadStatus === 'loading') return <p>Loading…</p>
-
   return (
     <section className="config-panel">
       <h3>Roster Positions</h3>
@@ -601,44 +441,138 @@ function RosterPositionsPanel() {
       </div>
 
       {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {(saveStatus === 'error' || loadStatus === 'error') && (
-        <p className="config-status config-status-error">{message}</p>
-      )}
+      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
     </section>
   )
 }
 
-const TABS = [
-  { key: 'scoring', label: 'Scoring', Panel: ScoringPanel },
-  { key: 'teams', label: 'Teams', Panel: TeamsPanel },
-  { key: 'my-team', label: 'My Team', Panel: MyTeamPanel },
-  { key: 'draft-order', label: 'Draft Order', Panel: DraftOrderPanel },
-  { key: 'roster-positions', label: 'Roster Positions', Panel: RosterPositionsPanel },
-]
+const TAB_KEYS = ['scoring', 'teams', 'my-team', 'draft-order', 'roster-positions']
 
 export default function ConfigPage() {
-  const [activeTab, setActiveTab] = useState(TABS[0].key)
-  const ActivePanel = TABS.find((t) => t.key === activeTab).Panel
+  const [activeTab, setActiveTab] = useState(TAB_KEYS[0])
+  const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
+  const [message, setMessage] = useState('')
+  const [data, setData] = useState(null)
+
+  // Everything loads once, here, on page mount - not per-tab - so
+  // switching tabs is instant and doesn't re-fire a fetch. teams is
+  // needed by both its own tab and My Team/Draft Order (for the
+  // dropdown/reorder list), so it's fetched once and shared rather than
+  // each panel fetching its own copy.
+  useEffect(() => {
+    ;(async () => {
+      const urls = {
+        scoring: SCORING_API_URL,
+        teams: TEAMS_API_URL,
+        myTeam: MY_TEAM_API_URL,
+        draftOrder: DRAFT_ORDER_API_URL,
+        rosterPositions: ROSTER_POSITIONS_API_URL,
+      }
+
+      if (Object.values(urls).some((url) => !url)) {
+        setLoadStatus('error')
+        setMessage('VITE_API_BASE_URL is not configured yet.')
+        return
+      }
+
+      try {
+        const headers = await authHeaders()
+        const [scoringRes, teamsRes, myTeamRes, draftOrderRes, rosterPositionsRes] = await Promise.all([
+          fetch(urls.scoring, { headers }),
+          fetch(urls.teams, { headers }),
+          fetch(urls.myTeam, { headers }),
+          fetch(urls.draftOrder, { headers }),
+          fetch(urls.rosterPositions, { headers }),
+        ])
+        const [scoringBody, teamsBody, myTeamBody, draftOrderBody, rosterPositionsBody] = await Promise.all([
+          scoringRes.json(),
+          teamsRes.json(),
+          myTeamRes.json(),
+          draftOrderRes.json(),
+          rosterPositionsRes.json(),
+        ])
+
+        for (const [res, body] of [
+          [scoringRes, scoringBody],
+          [teamsRes, teamsBody],
+          [myTeamRes, myTeamBody],
+          [draftOrderRes, draftOrderBody],
+          [rosterPositionsRes, rosterPositionsBody],
+        ]) {
+          if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+        }
+
+        const currentTeams = teamsBody.teams || []
+        const savedOrder = draftOrderBody.team_order || []
+        // Saved draft order might be stale (a team got added/removed/
+        // renamed since it was last saved) - fall back to teams' own
+        // order rather than showing something the backend would reject
+        // on save anyway.
+        const orderIsValid =
+          savedOrder.length === currentTeams.length &&
+          [...savedOrder].sort().join() === [...currentTeams].sort().join()
+
+        setData({
+          categories: scoringBody.categories || [],
+          teams: currentTeams,
+          myTeam: myTeamBody.team_name || '',
+          draftType: draftOrderBody.draft_type || 'snake',
+          teamOrder: orderIsValid ? savedOrder : currentTeams,
+          slots: (rosterPositionsBody.slots || []).map((s) => ({
+            slot_name: s.slot_name,
+            count: s.count,
+            eligible_positions: (s.eligible_positions || []).join(','),
+          })),
+        })
+        setLoadStatus('ready')
+      } catch (err) {
+        setLoadStatus('error')
+        setMessage(err.message)
+      }
+    })()
+  }, [])
 
   return (
     <div className="config-page">
       <h2>Config</h2>
 
       <div className="config-tabs" role="tablist">
-        {TABS.map((tab) => (
+        {TAB_KEYS.map((key) => (
           <button
-            key={tab.key}
+            key={key}
             role="tab"
-            aria-selected={activeTab === tab.key}
-            className={activeTab === tab.key ? 'active' : ''}
-            onClick={() => setActiveTab(tab.key)}
+            aria-selected={activeTab === key}
+            className={activeTab === key ? 'active' : ''}
+            onClick={() => setActiveTab(key)}
           >
-            {tab.label}
+            {{
+              scoring: 'Scoring',
+              teams: 'Teams',
+              'my-team': 'My Team',
+              'draft-order': 'Draft Order',
+              'roster-positions': 'Roster Positions',
+            }[key]}
           </button>
         ))}
       </div>
 
-      <ActivePanel />
+      {loadStatus === 'loading' && <p>Loading…</p>}
+      {loadStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
+
+      {loadStatus === 'ready' && (
+        <>
+          {activeTab === 'scoring' && <ScoringPanel initialCategories={data.categories} />}
+          {activeTab === 'teams' && <TeamsPanel initialTeams={data.teams} />}
+          {activeTab === 'my-team' && <MyTeamPanel teams={data.teams} initialMyTeam={data.myTeam} />}
+          {activeTab === 'draft-order' && (
+            <DraftOrderPanel
+              initialDraftType={data.draftType}
+              initialTeamOrder={data.teamOrder}
+            />
+          )}
+          {activeTab === 'roster-positions' && <RosterPositionsPanel initialSlots={data.slots} />}
+        </>
+      )}
     </div>
   )
 }

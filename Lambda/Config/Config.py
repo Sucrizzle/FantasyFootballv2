@@ -149,6 +149,34 @@ def _validate_roster_positions(body: dict) -> tuple[dict | None, str | None]:
     return {"slots": slots}, None
 
 
+def _config_key(name: str) -> str:
+    return f"config/{name}.json"
+
+
+def _read_config(name: str) -> dict:
+    """Reads a named config's current value, falling back to its registry
+    default if nothing's been saved yet. Shared by _handle_get and any
+    validator that needs to check against another config's value (e.g.
+    my_team/draft_order needing the current `teams` list)."""
+    try:
+        obj = s3.get_object(Bucket=BUCKET_NAME, Key=_config_key(name))
+        return json.loads(obj["Body"].read())
+    except s3.exceptions.NoSuchKey:
+        return CONFIG_REGISTRY[name]["default"]
+
+
+def _validate_my_team(body: dict) -> tuple[dict | None, str | None]:
+    team_name = body.get("team_name")
+    if not isinstance(team_name, str) or not team_name.strip():
+        return None, "`team_name` must be a non-empty string."
+
+    current_teams = _read_config("teams").get("teams", [])
+    if team_name not in current_teams:
+        return None, f"'{team_name}' isn't in the current teams list - add it under the Teams config first."
+
+    return {"team_name": team_name}, None
+
+
 # Adding a new config type is just adding an entry here - `validate` checks
 # and normalizes a PUT body, `default` is what GET returns before anyone's
 # ever saved a value for that name.
@@ -229,34 +257,6 @@ def _is_admin(event: dict) -> bool:
         members = [g.strip() for g in groups[1:-1].split(",") if g.strip()]
         return ADMIN_GROUP in members
     return ADMIN_GROUP in groups.split(",")
-
-
-def _config_key(name: str) -> str:
-    return f"config/{name}.json"
-
-
-def _read_config(name: str) -> dict:
-    """Reads a named config's current value, falling back to its registry
-    default if nothing's been saved yet. Shared by _handle_get and any
-    validator that needs to check against another config's value (e.g.
-    my_team needing the current `teams` list)."""
-    try:
-        obj = s3.get_object(Bucket=BUCKET_NAME, Key=_config_key(name))
-        return json.loads(obj["Body"].read())
-    except s3.exceptions.NoSuchKey:
-        return CONFIG_REGISTRY[name]["default"]
-
-
-def _validate_my_team(body: dict) -> tuple[dict | None, str | None]:
-    team_name = body.get("team_name")
-    if not isinstance(team_name, str) or not team_name.strip():
-        return None, "`team_name` must be a non-empty string."
-
-    current_teams = _read_config("teams").get("teams", [])
-    if team_name not in current_teams:
-        return None, f"'{team_name}' isn't in the current teams list - add it under the Teams config first."
-
-    return {"team_name": team_name}, None
 
 
 def _handle_get(name: str) -> dict:
