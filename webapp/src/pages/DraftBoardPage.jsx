@@ -94,15 +94,27 @@ const CHART_MAX_PPG = 30
 // reference line doesn't need anything heavier, same reasoning as the bar
 // chart above. Shares CHART_MAX_PPG with the bar chart so a viewer can
 // trust "tall" means the same thing in both charts within one panel.
+const HISTORY_SEASON_COUNT = 5
+
 function HistoryChart({ history, replacementValue, color }) {
+  const [hoveredSeason, setHoveredSeason] = useState(null)
+
   if (history.length === 0) {
     return <p className="draft-detail-history-empty">No season history available.</p>
   }
 
-  const sorted = [...history].sort((a, b) => a.season - b.season)
-  const width = 280
-  const height = 90
-  const padding = 10
+  // Most recent N seasons, oldest-to-newest for left-to-right rendering -
+  // gold produces full history on purpose (see chat), so "how many
+  // seasons to show" is entirely a presentation decision made here, not
+  // baked into the query.
+  const sorted = [...history]
+    .sort((a, b) => b.season - a.season)
+    .slice(0, HISTORY_SEASON_COUNT)
+    .sort((a, b) => a.season - b.season)
+
+  const width = 420
+  const height = 150
+  const padding = 20
 
   const scaleX = (i) =>
     padding + (sorted.length === 1 ? 0 : (i / (sorted.length - 1)) * (width - padding * 2))
@@ -111,12 +123,13 @@ function HistoryChart({ history, replacementValue, color }) {
 
   const linePoints = sorted.map((h, i) => `${scaleX(i)},${scaleY(h.fpts_pg)}`).join(' ')
   const replacementY = scaleY(replacementValue)
+  const hovered = sorted.find((h) => h.season === hoveredSeason)
 
   return (
     <svg
       className="draft-detail-history-chart"
       viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
+      preserveAspectRatio="xMidYMid meet"
     >
       <line
         className="draft-detail-history-goal"
@@ -125,29 +138,59 @@ function HistoryChart({ history, replacementValue, color }) {
         y1={replacementY}
         y2={replacementY}
       />
+
+      {/* Light halo behind the line/dots so they stay visible regardless
+          of how dark a given team's color is - some team colors (navy,
+          black, dark green) have very little contrast against a dark
+          background on their own. */}
+      <polyline className="draft-detail-history-line-halo" points={linePoints} />
       <polyline className="draft-detail-history-line" style={{ stroke: color }} points={linePoints} />
+
       {sorted.map((h, i) => (
-        <circle
-          key={h.season}
-          className="draft-detail-history-dot"
-          style={{ fill: color }}
-          cx={scaleX(i)}
-          cy={scaleY(h.fpts_pg)}
-          r={3}
-        >
-          <title>{`${h.season}: ${fixed2(h.fpts_pg)}`}</title>
-        </circle>
+        <g key={h.season}>
+          <circle
+            className="draft-detail-history-dot-halo"
+            cx={scaleX(i)}
+            cy={scaleY(h.fpts_pg)}
+            r={5}
+          />
+          <circle
+            className="draft-detail-history-dot"
+            style={{ fill: color }}
+            cx={scaleX(i)}
+            cy={scaleY(h.fpts_pg)}
+            r={3.5}
+            onMouseEnter={() => setHoveredSeason(h.season)}
+            onMouseLeave={() => setHoveredSeason((prev) => (prev === h.season ? null : prev))}
+          />
+        </g>
       ))}
+
       {sorted.map((h, i) => (
         <text
           key={`label-${h.season}`}
           className="draft-detail-history-axis-label"
           x={scaleX(i)}
-          y={height}
+          y={height - 4}
         >
           {h.season}
         </text>
       ))}
+
+      {hovered && (
+        <g className="draft-detail-history-tooltip">
+          <rect
+            x={scaleX(sorted.indexOf(hovered)) - 18}
+            y={scaleY(hovered.fpts_pg) - 24}
+            width={36}
+            height={16}
+            rx={3}
+          />
+          <text x={scaleX(sorted.indexOf(hovered))} y={scaleY(hovered.fpts_pg) - 12}>
+            {fixed2(hovered.fpts_pg)}
+          </text>
+        </g>
+      )}
     </svg>
   )
 }

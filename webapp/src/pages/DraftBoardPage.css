@@ -172,8 +172,8 @@
 
 .draft-detail-history-chart {
   width: 100%;
-  max-width: 280px;
-  height: 90px;
+  max-width: 420px;
+  height: 150px;
   margin-top: 0.75rem;
   display: block;
 }
@@ -181,22 +181,49 @@
 .draft-detail-history-goal {
   stroke: var(--text-h);
   stroke-width: 1;
-  stroke-dasharray: 3 2;
+  stroke-dasharray: 4 3;
+}
+
+/* Fixed light halo, not theme-adaptive - deliberately not var(--bg): the
+   problem this solves is specifically dark team colors (navy, black, dark
+   green) losing contrast against a dark background, so the halo needs to
+   stay light regardless of theme. In light mode a dark line already
+   contrasts fine against the page on its own, so this is a no-op there. */
+.draft-detail-history-line-halo {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 5;
+  stroke-linejoin: round;
 }
 
 .draft-detail-history-line {
   fill: none;
-  stroke-width: 2;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.draft-detail-history-dot-halo {
+  fill: rgba(255, 255, 255, 0.55);
 }
 
 .draft-detail-history-dot {
-  stroke: var(--bg);
-  stroke-width: 1;
+  cursor: pointer;
 }
 
 .draft-detail-history-axis-label {
-  font-size: 6px;
+  font-size: 9px;
   fill: var(--panel-muted);
+  text-anchor: middle;
+}
+
+.draft-detail-history-tooltip rect {
+  fill: var(--text-h);
+}
+
+.draft-detail-history-tooltip text {
+  fill: var(--bg);
+  font-size: 9px;
+  font-weight: 600;
   text-anchor: middle;
 }
 
