@@ -17,8 +17,8 @@ select
 , try_cast(season_st_fpts / games_played as decimal(10,2)) as st_fpts_pg
 , sum(pts_allowed_fpts) as season_pts_allowed_fpts
 , try_cast(season_pts_allowed_fpts / games_played as decimal(10,2)) as pts_allowed_fpts_pg
-, sum(dst_fpts) as season_fpts
-, try_cast(season_dst_fpts / games_played as decimal(10,2)) as season_fpts_pg
+, sum(dst_fpts) as fpts
+, try_cast(season_fpts / games_played as decimal(10,2)) as fpts_pg
 FROM read_parquet('${bucket}/gold/facts/fact_team_stats_weekly.parquet', union_by_name = true) ftsw
 join read_parquet('${bucket}/gold/dimensions/dim_schedule.parquet', union_by_name = true) ds
   on ftsw.game_id = ds.game_id
