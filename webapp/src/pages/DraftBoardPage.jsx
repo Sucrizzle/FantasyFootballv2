@@ -11,7 +11,8 @@ const DRAFT_BOARD_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board` : null
 // common entity_id/pos/team/*_fpts_pg/draft_score shape).
 const COLUMNS = [
   { key: 'pos', label: 'Pos' },
-  { key: 'entity_id', label: 'Team' },
+  { key: 'team', label: 'Team' },
+  { key: 'player_name', label: 'Player_Name' },
   { key: 'proj_fpts_pg', label: 'Proj PPG' },
   { key: 'r_fpts_pg', label: 'Replacement PPG' },
   { key: 'draft_score', label: 'Draft Score' },

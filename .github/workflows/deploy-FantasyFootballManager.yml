@@ -13,6 +13,7 @@ on:
       - "Lambda/Gold/queries/*"
       - "Lambda/Config/Config.py"
       - "Lambda/DraftBoard/DraftBoard.py"
+      - "Lambda/DraftBoard/queries/*"
       - "Datasets/Mappings/*.csv"
       - ".github/workflows/deploy-FantasyFootballManager.yml"
 
@@ -56,6 +57,11 @@ jobs:
         run: |
           aws s3 cp Lambda/Gold/queries/ \
             "s3://$MAPPINGS_BUCKET/gold/queries/" --recursive
+
+      - name: Upload DraftBoard query files
+        run: |
+          aws s3 cp Lambda/DraftBoard/queries/ \
+            "s3://$MAPPINGS_BUCKET/draft-board/queries/" --recursive
 
       - name: Package function code
         run: |
