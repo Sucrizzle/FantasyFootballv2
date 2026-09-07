@@ -12,7 +12,7 @@
 select
   fds.entity_id
 , fds.pos
-, dt.team as team_abbr
+, dt.team
 , dt.team_name as player_name
 , fds.proj_fpts_pg
 , fds.r_fpts_pg
