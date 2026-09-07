@@ -21,10 +21,79 @@ async function authHeaders() {
   }
 }
 
-function ScoringPanel({ initialCategories }) {
-  const [categories, setCategories] = useState(initialCategories)
+// Shared by every tab that uses explicit Save/Cancel (everything except
+// Draft Setup, which auto-saves instead). Tracks a `saved` baseline
+// alongside the live editable `value` - `hasChanges` is just whether they
+// currently differ, `cancel` reverts to the baseline, and a successful
+// save moves the baseline forward to what was just saved. Comparing via
+// JSON.stringify is fine here since every value this wraps (arrays of
+// plain objects/strings) round-trips through JSON as part of the PUT
+// itself anyway - there's nothing in these shapes that comparison would
+// get wrong (no Dates, functions, etc.).
+function useSavablePanel(initialValue, onSave) {
+  const [value, setValue] = useState(initialValue)
+  const [saved, setSaved] = useState(initialValue)
   const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
   const [message, setMessage] = useState('')
+
+  const hasChanges = JSON.stringify(value) !== JSON.stringify(saved)
+
+  async function save() {
+    setSaveStatus('saving')
+    setMessage('')
+
+    try {
+      const resultMessage = await onSave(value)
+      setSaved(value)
+      setSaveStatus('success')
+      setMessage(resultMessage || 'Saved.')
+    } catch (err) {
+      setSaveStatus('error')
+      setMessage(err.message)
+    }
+  }
+
+  function cancel() {
+    setValue(saved)
+    setSaveStatus('ready')
+    setMessage('')
+  }
+
+  return { value, setValue, hasChanges, saveStatus, message, save, cancel }
+}
+
+function SaveCancelActions({ hasChanges, saveStatus, message, onSave, onCancel }) {
+  const disabled = !hasChanges || saveStatus === 'saving'
+  return (
+    <>
+      <div className="config-panel-actions">
+        <button onClick={onSave} disabled={disabled}>
+          {saveStatus === 'saving' ? 'Saving…' : 'Save'}
+        </button>
+        <button onClick={onCancel} disabled={disabled}>
+          Cancel
+        </button>
+      </div>
+
+      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
+      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
+    </>
+  )
+}
+
+function ScoringPanel({ initialCategories }) {
+  const { value: categories, setValue: setCategories, hasChanges, saveStatus, message, save, cancel } =
+    useSavablePanel(initialCategories, async (categories) => {
+      const cleaned = categories.map((row) => ({ category: row.category, points: Number(row.points) }))
+      const res = await fetch(SCORING_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ categories: cleaned }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    })
 
   function updatePoints(index, points) {
     setCategories((prev) => prev.map((row, i) => (i === index ? { ...row, points } : row)))
@@ -40,30 +109,6 @@ function ScoringPanel({ initialCategories }) {
 
   function addRow() {
     setCategories((prev) => [...prev, { category: '', points: 0 }])
-  }
-
-  async function save() {
-    if (!SCORING_API_URL) return
-
-    setSaveStatus('saving')
-    setMessage('')
-
-    try {
-      const cleaned = categories.map((row) => ({ category: row.category, points: Number(row.points) }))
-      const res = await fetch(SCORING_API_URL, {
-        method: 'PUT',
-        headers: await authHeaders(),
-        body: JSON.stringify({ categories: cleaned }),
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-
-      setSaveStatus('success')
-      setMessage(body.message || 'Scoring config saved.')
-    } catch (err) {
-      setSaveStatus('error')
-      setMessage(err.message)
-    }
   }
 
   return (
@@ -96,22 +141,23 @@ function ScoringPanel({ initialCategories }) {
 
       <button type="button" onClick={addRow}>Add Category</button>
 
-      <div className="config-panel-actions">
-        <button onClick={save} disabled={saveStatus === 'saving'}>
-          {saveStatus === 'saving' ? 'Saving…' : 'Save Scoring Config'}
-        </button>
-      </div>
-
-      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
+      <SaveCancelActions hasChanges={hasChanges} saveStatus={saveStatus} message={message} onSave={save} onCancel={cancel} />
     </section>
   )
 }
 
 function TeamsPanel({ initialTeams }) {
-  const [teams, setTeams] = useState(initialTeams)
-  const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
-  const [message, setMessage] = useState('')
+  const { value: teams, setValue: setTeams, hasChanges, saveStatus, message, save, cancel } =
+    useSavablePanel(initialTeams, async (teams) => {
+      const res = await fetch(TEAMS_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ teams }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    })
 
   function updateTeamName(index, name) {
     setTeams((prev) => prev.map((t, i) => (i === index ? name : t)))
@@ -123,29 +169,6 @@ function TeamsPanel({ initialTeams }) {
 
   function addRow() {
     setTeams((prev) => [...prev, ''])
-  }
-
-  async function save() {
-    if (!TEAMS_API_URL) return
-
-    setSaveStatus('saving')
-    setMessage('')
-
-    try {
-      const res = await fetch(TEAMS_API_URL, {
-        method: 'PUT',
-        headers: await authHeaders(),
-        body: JSON.stringify({ teams }),
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-
-      setSaveStatus('success')
-      setMessage(body.message || 'Teams saved.')
-    } catch (err) {
-      setSaveStatus('error')
-      setMessage(err.message)
-    }
   }
 
   return (
@@ -170,30 +193,76 @@ function TeamsPanel({ initialTeams }) {
 
       <button type="button" onClick={addRow}>Add Team</button>
 
-      <div className="config-panel-actions">
-        <button onClick={save} disabled={saveStatus === 'saving'}>
-          {saveStatus === 'saving' ? 'Saving…' : 'Save Teams'}
-        </button>
-      </div>
-
-      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
+      <SaveCancelActions hasChanges={hasChanges} saveStatus={saveStatus} message={message} onSave={save} onCancel={cancel} />
     </section>
   )
 }
 
-function MyTeamPanel({ teams, initialMyTeam }) {
-  const [myTeam, setMyTeam] = useState(initialMyTeam)
-  const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
+// Auto-saves myTeam ~600ms after it stops changing, skipping the very
+// first render (that's just the initial fetched value, not an edit).
+// Shared by both fields on this panel - each field gets its own instance
+// with its own debounce timer, since they save to different config names.
+function useAutoSave(value, { onSave, skip = false }) {
+  const [status, setStatus] = useState('idle') // idle | saving | success | error
   const [message, setMessage] = useState('')
+  const didMount = useRef(false)
+  const onSaveRef = useRef(onSave)
 
-  async function save() {
-    if (!MY_TEAM_API_URL) return
+  // Refs shouldn't be written during render - keep the ref pointed at the
+  // latest onSave via its own effect (runs after every render) instead of
+  // assigning it inline above.
+  useEffect(() => {
+    onSaveRef.current = onSave
+  })
 
-    setSaveStatus('saving')
-    setMessage('')
+  // Keyed off a serialized value, not the raw reference - `value` can be
+  // an array/object literal built fresh every render (e.g. [draftType,
+  // teamOrder]), and effects compare dependencies by reference, so a new
+  // literal each render would otherwise retrigger this on every
+  // unrelated re-render, not just on real edits.
+  const key = JSON.stringify(value)
 
-    try {
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true
+      return
+    }
+    if (skip) return
+
+    const timeout = setTimeout(async () => {
+      setStatus('saving')
+      try {
+        const result = await onSaveRef.current()
+        setStatus('success')
+        setMessage(result || 'Saved.')
+      } catch (err) {
+        setStatus('error')
+        setMessage(err.message)
+      }
+    }, 600)
+
+    return () => clearTimeout(timeout)
+  }, [key, skip])
+
+  return { status, message }
+}
+
+function AutoSaveStatus({ save }) {
+  if (save.status === 'saving') return <p className="config-status">Saving…</p>
+  if (save.status === 'success') return <p className="config-status config-status-success">{save.message}</p>
+  if (save.status === 'error') return <p className="config-status config-status-error">{save.message}</p>
+  return null
+}
+
+function DraftSetupPanel({ teams, initialMyTeam, initialDraftType, initialTeamOrder }) {
+  const [myTeam, setMyTeam] = useState(initialMyTeam)
+  const [draftType, setDraftType] = useState(initialDraftType)
+  const [teamOrder, setTeamOrder] = useState(initialTeamOrder)
+  const [draggingName, setDraggingName] = useState(null)
+
+  const myTeamSave = useAutoSave(myTeam, {
+    skip: !myTeam,
+    onSave: async () => {
       const res = await fetch(MY_TEAM_API_URL, {
         method: 'PUT',
         headers: await authHeaders(),
@@ -201,57 +270,23 @@ function MyTeamPanel({ teams, initialMyTeam }) {
       })
       const body = await res.json()
       if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    },
+  })
 
-      setSaveStatus('success')
-      setMessage(body.message || 'My team saved.')
-    } catch (err) {
-      setSaveStatus('error')
-      setMessage(err.message)
-    }
-  }
-
-  return (
-    <section className="config-panel">
-      <h3>My Team</h3>
-      <p className="config-panel-description">
-        Which team in the Teams list is yours - drives which roster the
-        draft board tracks for positional need.
-      </p>
-
-      {teams.length === 0 ? (
-        <p className="config-panel-description">Add teams under the Teams config first.</p>
-      ) : (
-        <div className="config-form-row">
-          <label>
-            Team
-            <select value={myTeam} onChange={(e) => setMyTeam(e.target.value)}>
-              <option value="" disabled>Select a team…</option>
-              {teams.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-      )}
-
-      <div className="config-panel-actions">
-        <button onClick={save} disabled={saveStatus === 'saving' || !myTeam}>
-          {saveStatus === 'saving' ? 'Saving…' : 'Save My Team'}
-        </button>
-      </div>
-
-      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
-    </section>
-  )
-}
-
-function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
-  const [draftType, setDraftType] = useState(initialDraftType)
-  const [teamOrder, setTeamOrder] = useState(initialTeamOrder)
-  const [draggingName, setDraggingName] = useState(null)
-  const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
-  const [message, setMessage] = useState('')
+  const draftOrderSave = useAutoSave([draftType, teamOrder], {
+    skip: teamOrder.length === 0,
+    onSave: async () => {
+      const res = await fetch(DRAFT_ORDER_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ draft_type: draftType, team_order: teamOrder }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    },
+  })
 
   // FLIP animation (First-Last-Invert-Play): measure each row's position
   // before a reorder, let React re-render in the new order, then animate
@@ -293,7 +328,9 @@ function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
 
   // Reorders live, on every drag-over of a different team, rather than
   // only on drop - that's what makes the other rows visibly slide out of
-  // the way while dragging instead of just snapping at the end.
+  // the way while dragging instead of just snapping at the end. The
+  // auto-save debounce means this only actually PUTs ~600ms after you
+  // stop dragging, not on every intermediate reorder.
   function handleDragOver(e, overName) {
     e.preventDefault()
     if (overName === draggingName) return
@@ -310,80 +347,79 @@ function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
     })
   }
 
-  async function save() {
-    if (!DRAFT_ORDER_API_URL) return
-
-    setSaveStatus('saving')
-    setMessage('')
-
-    try {
-      const res = await fetch(DRAFT_ORDER_API_URL, {
-        method: 'PUT',
-        headers: await authHeaders(),
-        body: JSON.stringify({ draft_type: draftType, team_order: teamOrder }),
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
-
-      setSaveStatus('success')
-      setMessage(body.message || 'Draft order saved.')
-    } catch (err) {
-      setSaveStatus('error')
-      setMessage(err.message)
-    }
-  }
-
   return (
-    <section className="config-panel">
-      <h3>Draft Order</h3>
-      <p className="config-panel-description">
-        Round-1 pick order, drag to reorder. Snake reverses the order each
-        subsequent round; round robin repeats this same order every round.
-      </p>
+    <>
+      <section className="config-panel">
+        <h3>My Team</h3>
+        <p className="config-panel-description">
+          Which team in the Teams list is yours - drives which roster the
+          draft board tracks for positional need. Saves automatically.
+        </p>
 
-      {teamOrder.length === 0 ? (
-        <p className="config-panel-description">Add teams under the Teams config first.</p>
-      ) : (
-        <>
+        {teams.length === 0 ? (
+          <p className="config-panel-description">Add teams under the Teams config first.</p>
+        ) : (
           <div className="config-form-row">
             <label>
-              Draft Type
-              <select value={draftType} onChange={(e) => setDraftType(e.target.value)}>
-                <option value="snake">Snake</option>
-                <option value="round_robin">Round Robin</option>
+              Team
+              <select value={myTeam} onChange={(e) => setMyTeam(e.target.value)}>
+                <option value="" disabled>Select a team…</option>
+                {teams.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
               </select>
             </label>
           </div>
+        )}
 
-          <ol className="config-draft-order-list">
-            {teamOrder.map((name, i) => (
-              <li
-                key={name}
-                ref={(el) => { itemRefs.current[name] = el }}
-                draggable
-                className={draggingName === name ? 'dragging' : ''}
-                onDragStart={() => setDraggingName(name)}
-                onDragOver={(e) => handleDragOver(e, name)}
-                onDragEnd={() => setDraggingName(null)}
-              >
-                <span className="config-drag-handle">⠿</span>
-                <span className="config-draft-position">{i + 1}.</span>
-                {name}
-              </li>
-            ))}
-          </ol>
-        </>
-      )}
+        <AutoSaveStatus save={myTeamSave} />
+      </section>
 
-      <div className="config-panel-actions">
-        <button onClick={save} disabled={saveStatus === 'saving' || teamOrder.length === 0}>
-          {saveStatus === 'saving' ? 'Saving…' : 'Save Draft Order'}
-        </button>
-      </div>
+      <section className="config-panel">
+        <h3>Draft Order</h3>
+        <p className="config-panel-description">
+          Round-1 pick order, drag to reorder. Snake reverses the order each
+          subsequent round; round robin repeats this same order every round.
+          Saves automatically.
+        </p>
 
-      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
-    </section>
+        {teamOrder.length === 0 ? (
+          <p className="config-panel-description">Add teams under the Teams config first.</p>
+        ) : (
+          <>
+            <div className="config-form-row">
+              <label>
+                Draft Type
+                <select value={draftType} onChange={(e) => setDraftType(e.target.value)}>
+                  <option value="snake">Snake</option>
+                  <option value="round_robin">Round Robin</option>
+                </select>
+              </label>
+            </div>
+
+            <ol className="config-draft-order-list">
+              {teamOrder.map((name, i) => (
+                <li
+                  key={name}
+                  ref={(el) => { itemRefs.current[name] = el }}
+                  draggable
+                  className={draggingName === name ? 'dragging' : ''}
+                  onDragStart={() => setDraggingName(name)}
+                  onDragOver={(e) => handleDragOver(e, name)}
+                  onDragEnd={() => setDraggingName(null)}
+                >
+                  <span className="config-drag-handle">⠿</span>
+                  <span className="config-draft-position">{i + 1}.</span>
+                  {name}
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+
+        <AutoSaveStatus save={draftOrderSave} />
+      </section>
+    </>
   )
 }
 
@@ -393,29 +429,8 @@ function DraftOrderPanel({ initialDraftType, initialTeamOrder }) {
 // comma-separated string and split/joined on save/load rather than a
 // multi-select widget, to keep this simple for MVP1.
 function RosterPositionsPanel({ initialSlots }) {
-  const [slots, setSlots] = useState(initialSlots)
-  const [saveStatus, setSaveStatus] = useState('ready') // ready | saving | success | error
-  const [message, setMessage] = useState('')
-
-  function updateSlot(index, field, value) {
-    setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)))
-  }
-
-  function removeRow(index) {
-    setSlots((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  function addRow() {
-    setSlots((prev) => [...prev, { slot_name: '', count: 1, eligible_positions: '' }])
-  }
-
-  async function save() {
-    if (!ROSTER_POSITIONS_API_URL) return
-
-    setSaveStatus('saving')
-    setMessage('')
-
-    try {
+  const { value: slots, setValue: setSlots, hasChanges, saveStatus, message, save, cancel } =
+    useSavablePanel(initialSlots, async (slots) => {
       const cleaned = slots.map((s) => ({
         slot_name: s.slot_name,
         count: Number(s.count),
@@ -431,13 +446,19 @@ function RosterPositionsPanel({ initialSlots }) {
       })
       const body = await res.json()
       if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    })
 
-      setSaveStatus('success')
-      setMessage(body.message || 'Roster positions saved.')
-    } catch (err) {
-      setSaveStatus('error')
-      setMessage(err.message)
-    }
+  function updateSlot(index, field, value) {
+    setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)))
+  }
+
+  function removeRow(index) {
+    setSlots((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function addRow() {
+    setSlots((prev) => [...prev, { slot_name: '', count: 1, eligible_positions: '' }])
   }
 
   return (
@@ -476,19 +497,12 @@ function RosterPositionsPanel({ initialSlots }) {
 
       <button type="button" onClick={addRow}>Add Slot</button>
 
-      <div className="config-panel-actions">
-        <button onClick={save} disabled={saveStatus === 'saving'}>
-          {saveStatus === 'saving' ? 'Saving…' : 'Save Roster Positions'}
-        </button>
-      </div>
-
-      {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
-      {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
+      <SaveCancelActions hasChanges={hasChanges} saveStatus={saveStatus} message={message} onSave={save} onCancel={cancel} />
     </section>
   )
 }
 
-const TAB_KEYS = ['scoring', 'teams', 'my-team', 'draft-order', 'roster-positions']
+const TAB_KEYS = ['scoring', 'teams', 'draft-setup', 'roster-positions']
 
 export default function ConfigPage() {
   const [activeTab, setActiveTab] = useState(TAB_KEYS[0])
@@ -590,8 +604,7 @@ export default function ConfigPage() {
             {{
               scoring: 'Scoring',
               teams: 'Teams',
-              'my-team': 'My Team',
-              'draft-order': 'Draft Order',
+              'draft-setup': 'Draft Setup',
               'roster-positions': 'Roster Positions',
             }[key]}
           </button>
@@ -605,9 +618,10 @@ export default function ConfigPage() {
         <>
           {activeTab === 'scoring' && <ScoringPanel initialCategories={data.categories} />}
           {activeTab === 'teams' && <TeamsPanel initialTeams={data.teams} />}
-          {activeTab === 'my-team' && <MyTeamPanel teams={data.teams} initialMyTeam={data.myTeam} />}
-          {activeTab === 'draft-order' && (
-            <DraftOrderPanel
+          {activeTab === 'draft-setup' && (
+            <DraftSetupPanel
+              teams={data.teams}
+              initialMyTeam={data.myTeam}
               initialDraftType={data.draftType}
               initialTeamOrder={data.teamOrder}
             />
