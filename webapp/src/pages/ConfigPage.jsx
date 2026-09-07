@@ -62,10 +62,13 @@ function useSavablePanel(initialValue, onSave) {
   return { value, setValue, hasChanges, saveStatus, message, save, cancel }
 }
 
+// Sticky rather than an inline block, so it stays on screen (like a
+// footer) while scrolling a long panel - e.g. a growing Scoring category
+// list - instead of scrolling out of view along with the content.
 function SaveCancelActions({ hasChanges, saveStatus, message, onSave, onCancel }) {
   const disabled = !hasChanges || saveStatus === 'saving'
   return (
-    <>
+    <div className="config-actions-footer">
       <div className="config-panel-actions">
         <button onClick={onSave} disabled={disabled}>
           {saveStatus === 'saving' ? 'Saving…' : 'Save'}
@@ -77,7 +80,7 @@ function SaveCancelActions({ hasChanges, saveStatus, message, onSave, onCancel }
 
       {saveStatus === 'success' && <p className="config-status config-status-success">{message}</p>}
       {saveStatus === 'error' && <p className="config-status config-status-error">{message}</p>}
-    </>
+    </div>
   )
 }
 
@@ -399,18 +402,22 @@ function DraftSetupPanel({ teams, initialMyTeam, initialDraftType, initialTeamOr
 
             <ol className="config-draft-order-list">
               {teamOrder.map((name, i) => (
-                <li
-                  key={name}
-                  ref={(el) => { itemRefs.current[name] = el }}
-                  draggable
-                  className={draggingName === name ? 'dragging' : ''}
-                  onDragStart={() => setDraggingName(name)}
-                  onDragOver={(e) => handleDragOver(e, name)}
-                  onDragEnd={() => setDraggingName(null)}
-                >
-                  <span className="config-drag-handle">⠿</span>
+                <li key={name} ref={(el) => { itemRefs.current[name] = el }} className="config-draft-order-row">
+                  <div
+                    draggable
+                    className={[
+                      'config-draft-order-box',
+                      draggingName === name && 'dragging',
+                      myTeam === name && 'my-team',
+                    ].filter(Boolean).join(' ')}
+                    onDragStart={() => setDraggingName(name)}
+                    onDragOver={(e) => handleDragOver(e, name)}
+                    onDragEnd={() => setDraggingName(null)}
+                  >
+                    <span className="config-drag-handle">⠿</span>
+                    {name}
+                  </div>
                   <span className="config-draft-position">{i + 1}.</span>
-                  {name}
                 </li>
               ))}
             </ol>
@@ -559,6 +566,15 @@ export default function ConfigPage() {
         }
 
         const currentTeams = teamsBody.teams || []
+        // Same staleness problem as draft order below, one field instead
+        // of a whole list: if the team was renamed/removed since my_team
+        // was last saved, the saved name won't match anything in the
+        // current list, and a <select> can't show a value that isn't one
+        // of its options - falls back to unselected rather than silently
+        // holding a value nothing can display.
+        const savedMyTeam = myTeamBody.team_name || ''
+        const myTeamIsValid = currentTeams.includes(savedMyTeam)
+
         const savedOrder = draftOrderBody.team_order || []
         // Saved draft order might be stale (a team got added/removed/
         // renamed since it was last saved) - fall back to teams' own
@@ -571,7 +587,7 @@ export default function ConfigPage() {
         setData({
           categories: scoringBody.categories || [],
           teams: currentTeams,
-          myTeam: myTeamBody.team_name || '',
+          myTeam: myTeamIsValid ? savedMyTeam : '',
           draftType: draftOrderBody.draft_type || 'snake',
           teamOrder: orderIsValid ? savedOrder : currentTeams,
           slots: (rosterPositionsBody.slots || []).map((s) => ({
