@@ -7,6 +7,9 @@
       { "name": "fact_team_stats_weekly", "query_file": "fact_team_stats_weekly.sql", "output_path": "gold/facts/fact_team_stats_weekly.parquet" },
       { "name": "fact_team_stats_season", "query_file": "fact_team_stats_season.sql", "output_path": "gold/facts/fact_team_stats_season.parquet" },
 
+      { "name": "fact_player_stats_weekly", "query_file": "fact_playerstats_weekly.sql", "output_path": "gold/facts/fact_player_stats_weekly.parquet" },
+      
+
       { "name": "fact_draft_scores", "query_file": "fact_draft_scores.sql", "output_path": "gold/facts/fact_draft_scores.parquet" },
       { "name": "fact_draft_player_history", "query_file": "fact_draft_player_history.sql", "output_path": "gold/facts/fact_draft_player_history.parquet" }
 ]
