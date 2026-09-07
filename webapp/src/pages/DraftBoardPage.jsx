@@ -166,14 +166,23 @@ function HistoryChart({ history, replacementValue, projectedValue, color }) {
       <polyline className="draft-detail-history-line" style={{ stroke: color }} points={historyLinePoints} />
 
       {hasProjection && sortedHistory.length > 0 && (
-        <line
-          className="draft-detail-history-projection-line"
-          style={{ stroke: color }}
-          x1={scaleX(sortedHistory.length - 1)}
-          y1={scaleY(sortedHistory[sortedHistory.length - 1].fpts_pg)}
-          x2={scaleX(points.length - 1)}
-          y2={scaleY(projectedValue)}
-        />
+        <>
+          <line
+            className="draft-detail-history-projection-line-halo"
+            x1={scaleX(sortedHistory.length - 1)}
+            y1={scaleY(sortedHistory[sortedHistory.length - 1].fpts_pg)}
+            x2={scaleX(points.length - 1)}
+            y2={scaleY(projectedValue)}
+          />
+          <line
+            className="draft-detail-history-projection-line"
+            style={{ stroke: color }}
+            x1={scaleX(sortedHistory.length - 1)}
+            y1={scaleY(sortedHistory[sortedHistory.length - 1].fpts_pg)}
+            x2={scaleX(points.length - 1)}
+            y2={scaleY(projectedValue)}
+          />
+        </>
       )}
 
       {points.map((p, i) => (
@@ -218,7 +227,12 @@ function PlayerDetailPanel({ row, history }) {
   const projectedPct = Math.min((row.proj_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const replacementPct = Math.min((row.r_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const barColor = row.team_color || 'var(--accent)'
-  const isAboveReplacement = row.proj_fpts_pg >= row.r_fpts_pg
+  const isAboveReplacement = row.draft_score >= 0
+  // draft_score is already proj_fpts_pg - r_fpts_pg, computed once in SQL
+  // - reused directly here rather than resubtracting client-side, so this
+  // can't ever drift from the value shown in the main table's own column.
+  // toFixed already prefixes "-" for negatives; only "+" needs adding.
+  const signedScore = isAboveReplacement ? `+${fixed2(row.draft_score)}` : fixed2(row.draft_score)
 
   return (
     <div className="draft-detail-panel">
@@ -244,9 +258,8 @@ function PlayerDetailPanel({ row, history }) {
             className={`draft-detail-bar-value ${
               isAboveReplacement ? 'draft-detail-bar-value-positive' : 'draft-detail-bar-value-negative'
             }`}
-            title={`${fixed2(row.proj_fpts_pg)} ${isAboveReplacement ? 'above' : 'below'} replacement`}
           >
-            {isAboveReplacement ? '+' : '−'}
+            {signedScore}
           </span>
         </div>
 

@@ -158,7 +158,7 @@
 }
 
 .draft-detail-bar-value {
-  width: 3rem;
+  width: 4rem;
   flex-shrink: 0;
   text-align: right;
   font-size: 0.85rem;
@@ -218,6 +218,13 @@
   fill: none;
   stroke-width: 2.5;
   stroke-linejoin: round;
+}
+
+.draft-detail-history-projection-line-halo {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 4;
+  stroke-dasharray: 3 3;
 }
 
 .draft-detail-history-projection-line {
