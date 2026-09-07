@@ -12,6 +12,7 @@ const TEAMS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/teams` : null
 const ROSTER_POSITIONS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
 const MY_TEAM_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : null
 const DRAFT_ORDER_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/draft_order` : null
+const DRAFT_STATE_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-state` : null
 
 async function authHeaders() {
   const session = await fetchAuthSession()
@@ -263,6 +264,31 @@ function DraftSetupPanel({ teams, initialMyTeam, initialDraftType, initialTeamOr
   const [draftType, setDraftType] = useState(initialDraftType)
   const [teamOrder, setTeamOrder] = useState(initialTeamOrder)
   const [draggingName, setDraggingName] = useState(null)
+  const [resetStatus, setResetStatus] = useState('ready') // ready | resetting | success | error
+  const [resetMessage, setResetMessage] = useState('')
+
+  async function resetDraft() {
+    if (!DRAFT_STATE_API_URL) return
+    if (!window.confirm('This permanently deletes every recorded pick. Are you sure?')) return
+
+    setResetStatus('resetting')
+    setResetMessage('')
+
+    try {
+      const res = await fetch(DRAFT_STATE_API_URL, {
+        method: 'DELETE',
+        headers: await authHeaders(),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+
+      setResetStatus('success')
+      setResetMessage(body.message || 'Draft reset.')
+    } catch (err) {
+      setResetStatus('error')
+      setResetMessage(err.message)
+    }
+  }
 
   const myTeamSave = useAutoSave(myTeam, {
     skip: !myTeam,
@@ -426,6 +452,22 @@ function DraftSetupPanel({ teams, initialMyTeam, initialDraftType, initialTeamOr
         )}
 
         <AutoSaveStatus save={draftOrderSave} />
+      </section>
+
+      <section className="config-panel config-panel-danger">
+        <h3>Danger Zone</h3>
+        <p className="config-panel-description">
+          Permanently deletes every recorded pick from the live draft.
+          There's no undo for this - only use it to restart a draft from
+          scratch, or to clear out test picks.
+        </p>
+
+        <button type="button" onClick={resetDraft} disabled={resetStatus === 'resetting'}>
+          {resetStatus === 'resetting' ? 'Resetting…' : 'Hard Reset Draft'}
+        </button>
+
+        {resetStatus === 'success' && <p className="config-status config-status-success">{resetMessage}</p>}
+        {resetStatus === 'error' && <p className="config-status config-status-error">{resetMessage}</p>}
       </section>
     </>
   )

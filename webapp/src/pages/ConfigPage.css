@@ -1,3 +1,7 @@
+.config-panel-danger {
+  border-color: var(--error);
+}
+
 .config-tabs {
   display: flex;
   gap: 0.25rem;

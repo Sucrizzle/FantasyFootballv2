@@ -44,15 +44,32 @@ authorizer attached:
         bugs from the client guessing wrong.
     DELETE /draft-state/{pick_number}
         -> 200 {"message": "..."}
-        Undo support - mis-clicks happen live, and there's no reason a
-        correction should require going around this API.
+        Undo-last only, not an arbitrary delete - only the current highest
+        pick_number can be removed, rejected otherwise. This keeps the
+        pick_number sequence gapless, which every derived value (current
+        pick number, whose turn is next) depends on being true.
+    PUT /draft-state/{pick_number}
+        body: {"team": "...", "entity_id": "...", "pos": "..."}
+        -> 200 {"pick_number": <n>, "team": "...", "entity_id": "...", "pos": "..."}
+        Correction, not undo - edits an EXISTING pick's contents in place
+        without changing its pick_number, for "we recorded the wrong
+        player/team for pick #12" after the draft has already moved past
+        it. Deliberately doesn't touch the gapless sequence at all, unlike
+        DELETE, so nothing later needs renumbering.
+    DELETE /draft-state
+        (no pick_number - the bare collection route)
+        -> 200 {"message": "..."}
+        Hard reset - wipes every pick. Admin-gated, unlike every other
+        route here: this is destructive and rare (redoing a draft from
+        scratch, or resetting test data), not something any signed-in
+        user should be able to trigger by accident.
 
 Deploy notes:
     - Runtime: Python 3.12+, boto3 only (included in the base runtime) -
       no layer needed, same as Config.py.
     - Execution role: needs dynamodb:GetItem/PutItem/DeleteItem/Scan
       scoped to the draft-state table ARN, PLUS s3:GetObject scoped to
-      "config/teams.json" (to validate the team name on a POST).
+      "config/teams.json" (to validate the team name on a POST/PUT).
     - Set the BUCKET_NAME and DRAFT_STATE_TABLE_NAME environment
       variables - differ between dev and prod deploys of this same code.
     - Timeout: short (10-15s) is plenty.
@@ -64,6 +81,8 @@ import os
 
 import boto3
 from boto3.dynamodb.conditions import Attr
+
+ADMIN_GROUP = "admin"
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 DRAFT_STATE_TABLE_NAME = os.environ["DRAFT_STATE_TABLE_NAME"]
@@ -90,6 +109,25 @@ def _valid_teams() -> list[str]:
         return json.loads(obj["Body"].read()).get("teams", [])
     except s3.exceptions.NoSuchKey:
         return []
+
+
+def _is_admin(event: dict) -> bool:
+    # Same claim-parsing logic as Bronze/Silver/Gold/Config - see those
+    # files for why this specific shape (HTTP API's JWT authorizer
+    # serializes array claims as a bracket-wrapped, comma-separated,
+    # NON-json-quoted string like "[admin]", not valid JSON). Only the
+    # hard-reset route uses this - every other route here is intentionally
+    # open to any authenticated user.
+    authorizer = event.get("requestContext", {}).get("authorizer", {})
+    claims = authorizer.get("jwt", {}).get("claims", {}) or authorizer.get("claims", {})
+    groups = claims.get("cognito:groups", "")
+
+    if isinstance(groups, list):
+        return ADMIN_GROUP in groups
+    if groups.startswith("[") and groups.endswith("]"):
+        members = [g.strip() for g in groups[1:-1].split(",") if g.strip()]
+        return ADMIN_GROUP in members
+    return ADMIN_GROUP in groups.split(",")
 
 
 def _handle_get() -> dict:
@@ -157,16 +195,103 @@ def _handle_delete(event: dict) -> dict:
     except ValueError:
         return _response(400, {"error": "`pick_number` must be an integer."})
 
+    # Undo-last only, not an arbitrary delete-by-key - deleting a middle
+    # pick would leave a gap in pick_number, and everything downstream
+    # (current pick number, whose turn is next) is derived by assuming the
+    # sequence is dense (max(pick_number) + 1). Enforcing that here is
+    # what keeps that assumption actually safe to rely on everywhere else.
+    existing = draft_state_table.scan().get("Items", [])
+    if not existing:
+        return _response(400, {"error": "No picks to undo."})
+
+    latest_pick_number = max(int(i["pick_number"]) for i in existing)
+    if pick_number != latest_pick_number:
+        return _response(400, {
+            "error": f"Only the most recent pick (#{latest_pick_number}) can be undone, not #{pick_number}.",
+        })
+
     draft_state_table.delete_item(Key={"pick_number": pick_number})
     return _response(200, {"message": f"Pick {pick_number} removed."})
 
 
+def _handle_put(event: dict) -> dict:
+    pick_number = (event.get("pathParameters") or {}).get("pick_number")
+    if not pick_number:
+        return _response(400, {"error": "Missing pick_number."})
+
+    try:
+        pick_number = int(pick_number)
+    except ValueError:
+        return _response(400, {"error": "`pick_number` must be an integer."})
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _response(400, {"error": "Invalid JSON body."})
+
+    team = body.get("team")
+    entity_id = body.get("entity_id")
+    pos = body.get("pos")
+
+    if not team or not entity_id or not pos:
+        return _response(400, {"error": "`team`, `entity_id`, and `pos` are all required."})
+
+    if team not in _valid_teams():
+        return _response(400, {"error": f"'{team}' isn't in the current teams list."})
+
+    existing = draft_state_table.scan().get("Items", [])
+
+    # Excludes this pick_number itself - editing pick #12 to still say
+    # what it already said isn't a conflict with itself.
+    already_picked_elsewhere = any(
+        i["entity_id"] == entity_id and i["pos"] == pos and int(i["pick_number"]) != pick_number
+        for i in existing
+    )
+    if already_picked_elsewhere:
+        return _response(400, {"error": f"{pos} '{entity_id}' was already picked at a different pick number."})
+
+    item = {
+        "pick_number": pick_number,
+        "team": team,
+        "entity_id": entity_id,
+        "pos": pos,
+    }
+
+    try:
+        draft_state_table.put_item(
+            Item=item,
+            # Edit-in-place, not upsert - this must already exist. If it
+            # doesn't, that pick_number was never made and the caller
+            # should POST a new pick instead, not PUT one into existence.
+            ConditionExpression=Attr("pick_number").exists(),
+        )
+    except draft_state_table.meta.client.exceptions.ConditionalCheckFailedException:
+        return _response(404, {"error": f"Pick #{pick_number} doesn't exist yet."})
+
+    return _response(200, item)
+
+
+def _handle_reset(event: dict) -> dict:
+    if not _is_admin(event):
+        return _response(403, {"error": "Admin access required."})
+
+    existing = draft_state_table.scan().get("Items", [])
+    with draft_state_table.batch_writer() as batch:
+        for item in existing:
+            batch.delete_item(Key={"pick_number": item["pick_number"]})
+
+    return _response(200, {"message": f"Draft reset - {len(existing)} pick(s) removed."})
+
+
 def handler(event, context):
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
+    has_pick_number = bool((event.get("pathParameters") or {}).get("pick_number"))
 
     if method == "POST":
         return _handle_post(event)
+    if method == "PUT":
+        return _handle_put(event)
     if method == "DELETE":
-        return _handle_delete(event)
+        return _handle_delete(event) if has_pick_number else _handle_reset(event)
 
     return _handle_get()
