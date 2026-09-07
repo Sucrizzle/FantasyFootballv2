@@ -1,0 +1,38 @@
+.draft-board-page {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  text-align: left;
+}
+
+.draft-board-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.draft-board-table th,
+.draft-board-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.draft-board-table th {
+  cursor: pointer;
+  color: var(--panel-muted);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.draft-board-table th:hover {
+  color: inherit;
+}
+
+.draft-board-table tbody tr:hover {
+  background: var(--panel-overlay);
+}
+
+.draft-board-status-error {
+  color: var(--error);
+}
