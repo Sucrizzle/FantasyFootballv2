@@ -105,6 +105,7 @@
 }
 
 .draft-detail-bar-track {
+  position: relative;
   flex: 1;
   height: 0.9rem;
   background: var(--panel-overlay);
@@ -117,12 +118,14 @@
   border-radius: 4px;
 }
 
-.draft-detail-bar-projected {
-  background: var(--accent);
-}
-
-.draft-detail-bar-replacement {
-  background: var(--panel-muted);
+.draft-detail-bar-goal {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--text-h);
+  transform: translateX(-50%);
+  box-shadow: 0 0 0 1px var(--bg);
 }
 
 .draft-detail-bar-value {
@@ -130,6 +133,21 @@
   flex-shrink: 0;
   text-align: right;
   font-size: 0.85rem;
+}
+
+.draft-detail-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0 6rem;
+  font-size: 0.8rem;
+  color: var(--panel-muted);
+}
+
+.draft-detail-legend-goal {
+  width: 2px;
+  height: 0.9rem;
+  background: var(--text-h);
 }
 
 .draft-detail-score-positive {

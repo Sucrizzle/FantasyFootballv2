@@ -9,13 +9,20 @@ const DRAFT_BOARD_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-board` : null
 // output - only DST exists today, but this table doesn't care how many
 // positions are behind it, by design (see chat: the whole point of the
 // common entity_id/pos/team/*_fpts_pg/draft_score shape).
+// toFixed(2) here is purely a display concern, applied only when
+// rendering a cell - the underlying row values stay real numbers so
+// sorting keeps working correctly. A number like 6.3 round-trips through
+// JSON/JS with no memory of trailing zeros; only explicit formatting
+// forces "always 2 decimal places" on screen.
+const fixed2 = (v) => (typeof v === 'number' ? v.toFixed(2) : v)
+
 const COLUMNS = [
   { key: 'pos', label: 'Pos' },
   { key: 'team', label: 'Team' },
   { key: 'player_name', label: 'Player_Name' },
-  { key: 'proj_fpts_pg', label: 'Proj PPG' },
-  { key: 'r_fpts_pg', label: 'Replacement PPG' },
-  { key: 'draft_score', label: 'Draft Score' },
+  { key: 'proj_fpts_pg', label: 'Proj PPG', format: fixed2 },
+  { key: 'r_fpts_pg', label: 'Replacement PPG', format: fixed2 },
+  { key: 'draft_score', label: 'Draft Score', format: fixed2 },
 ]
 
 // Standard "dropdown that expands into checkboxes" pattern - a native
@@ -67,14 +74,23 @@ function PositionFilter({ allPositions, selectedPositions, onToggle }) {
   )
 }
 
-// Plain CSS bars, not a charting library - it's exactly two values on a
-// shared scale, which doesn't need anything heavier. The scale is local
-// to this row (max of its own two values, plus headroom) rather than
-// computed across the whole dataset, so opening one row's panel doesn't
-// need to know about every other row.
+// Plain CSS, not a charting library - one bar (team-colored, projected
+// PPG) plus a vertical "goal line" marker at the replacement value on the
+// same track, rather than two separate bars.
+//
+// Fixed scale (not "max of this row's own two values") deliberately - a
+// per-row scale makes every bar look similarly full regardless of actual
+// magnitude, which defeats comparing impact across rows/positions. 30 is
+// comfortably above any realistic weekly PPG for this scoring config;
+// revisit if a position/scoring change ever pushes real values close to
+// or past it.
+const CHART_MAX_PPG = 30
+
 function PlayerDetailPanel({ row }) {
-  const maxScale = Math.max(row.proj_fpts_pg, row.r_fpts_pg) * 1.15 || 1
   const scoreIsPositive = row.draft_score >= 0
+  const projectedPct = Math.min((row.proj_fpts_pg / CHART_MAX_PPG) * 100, 100)
+  const replacementPct = Math.min((row.r_fpts_pg / CHART_MAX_PPG) * 100, 100)
+  const barColor = row.team_color || 'var(--accent)'
 
   return (
     <div className="draft-detail-panel">
@@ -84,29 +100,27 @@ function PlayerDetailPanel({ row }) {
 
       <div className="draft-detail-chart">
         <div className="draft-detail-bar-row">
-          <span className="draft-detail-bar-label">Projected</span>
+          <span className="draft-detail-bar-label">Proj PPG</span>
           <div className="draft-detail-bar-track">
             <div
-              className="draft-detail-bar-fill draft-detail-bar-projected"
-              style={{ width: `${(row.proj_fpts_pg / maxScale) * 100}%` }}
+              className="draft-detail-bar-fill"
+              style={{ width: `${projectedPct}%`, background: barColor }}
+            />
+            <div
+              className="draft-detail-bar-goal"
+              style={{ left: `${replacementPct}%` }}
+              title={`Replacement level: ${fixed2(row.r_fpts_pg)}`}
             />
           </div>
-          <span className="draft-detail-bar-value">{row.proj_fpts_pg}</span>
+          <span className="draft-detail-bar-value">{fixed2(row.proj_fpts_pg)}</span>
         </div>
 
-        <div className="draft-detail-bar-row">
-          <span className="draft-detail-bar-label">Replacement</span>
-          <div className="draft-detail-bar-track">
-            <div
-              className="draft-detail-bar-fill draft-detail-bar-replacement"
-              style={{ width: `${(row.r_fpts_pg / maxScale) * 100}%` }}
-            />
-          </div>
-          <span className="draft-detail-bar-value">{row.r_fpts_pg}</span>
-        </div>
+        <p className="draft-detail-legend">
+          <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
+        </p>
 
         <p className={scoreIsPositive ? 'draft-detail-score-positive' : 'draft-detail-score-negative'}>
-          Draft Score: {scoreIsPositive ? '+' : ''}{row.draft_score}
+          Draft Score: {scoreIsPositive ? '+' : ''}{fixed2(row.draft_score)}
         </p>
       </div>
     </div>
@@ -220,7 +234,7 @@ export default function DraftBoardPage() {
                     onClick={() => setExpandedKey(isExpanded ? null : key)}
                   >
                     {COLUMNS.map((col) => (
-                      <td key={col.key}>{row[col.key]}</td>
+                      <td key={col.key}>{col.format ? col.format(row[col.key]) : row[col.key]}</td>
                     ))}
                   </tr>
                   {isExpanded && (

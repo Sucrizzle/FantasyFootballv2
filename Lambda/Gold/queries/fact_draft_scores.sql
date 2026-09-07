@@ -73,6 +73,6 @@ select
 , 'DST' as pos
 , r.proj_fpts_pg
 , rl.r_fpts_pg
-, r.proj_fpts_pg - rl.r_fpts_pg as draft_score
+, try_cast(r.proj_fpts_pg - rl.r_fpts_pg as decimal(10,2)) as draft_score
 from dst_ranked r
 cross join dst_replacement_level rl

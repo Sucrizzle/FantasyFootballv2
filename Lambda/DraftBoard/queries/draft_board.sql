@@ -18,6 +18,7 @@ select
 , fds.r_fpts_pg
 , fds.draft_score
 , dt.team_logo_squared as image_url
+, dt.team_color
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
   on fds.entity_id = dt.team
