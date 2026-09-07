@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import './DraftBoardPage.css'
 
@@ -67,6 +67,52 @@ function PositionFilter({ allPositions, selectedPositions, onToggle }) {
   )
 }
 
+// Plain CSS bars, not a charting library - it's exactly two values on a
+// shared scale, which doesn't need anything heavier. The scale is local
+// to this row (max of its own two values, plus headroom) rather than
+// computed across the whole dataset, so opening one row's panel doesn't
+// need to know about every other row.
+function PlayerDetailPanel({ row }) {
+  const maxScale = Math.max(row.proj_fpts_pg, row.r_fpts_pg) * 1.15 || 1
+  const scoreIsPositive = row.draft_score >= 0
+
+  return (
+    <div className="draft-detail-panel">
+      {row.image_url && (
+        <img className="draft-detail-image" src={row.image_url} alt={row.player_name} />
+      )}
+
+      <div className="draft-detail-chart">
+        <div className="draft-detail-bar-row">
+          <span className="draft-detail-bar-label">Projected</span>
+          <div className="draft-detail-bar-track">
+            <div
+              className="draft-detail-bar-fill draft-detail-bar-projected"
+              style={{ width: `${(row.proj_fpts_pg / maxScale) * 100}%` }}
+            />
+          </div>
+          <span className="draft-detail-bar-value">{row.proj_fpts_pg}</span>
+        </div>
+
+        <div className="draft-detail-bar-row">
+          <span className="draft-detail-bar-label">Replacement</span>
+          <div className="draft-detail-bar-track">
+            <div
+              className="draft-detail-bar-fill draft-detail-bar-replacement"
+              style={{ width: `${(row.r_fpts_pg / maxScale) * 100}%` }}
+            />
+          </div>
+          <span className="draft-detail-bar-value">{row.r_fpts_pg}</span>
+        </div>
+
+        <p className={scoreIsPositive ? 'draft-detail-score-positive' : 'draft-detail-score-negative'}>
+          Draft Score: {scoreIsPositive ? '+' : ''}{row.draft_score}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function DraftBoardPage() {
   const [rows, setRows] = useState([])
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
@@ -76,6 +122,7 @@ export default function DraftBoardPage() {
   // null = "no filter applied yet" (show everything) - distinct from an
   // empty array, which would mean "user deselected every position."
   const [selectedPositions, setSelectedPositions] = useState(null)
+  const [expandedKey, setExpandedKey] = useState(null)
 
   useEffect(() => {
     ;(async () => {
@@ -163,13 +210,29 @@ export default function DraftBoardPage() {
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((row) => (
-              <tr key={`${row.pos}-${row.entity_id}`}>
-                {COLUMNS.map((col) => (
-                  <td key={col.key}>{row[col.key]}</td>
-                ))}
-              </tr>
-            ))}
+            {sortedRows.map((row) => {
+              const key = `${row.pos}-${row.entity_id}`
+              const isExpanded = expandedKey === key
+              return (
+                <Fragment key={key}>
+                  <tr
+                    className="draft-board-row"
+                    onClick={() => setExpandedKey(isExpanded ? null : key)}
+                  >
+                    {COLUMNS.map((col) => (
+                      <td key={col.key}>{row[col.key]}</td>
+                    ))}
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={COLUMNS.length}>
+                        <PlayerDetailPanel row={row} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       )}
