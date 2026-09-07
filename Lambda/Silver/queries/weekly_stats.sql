@@ -9,7 +9,7 @@ select
 , ws.week
 , ws.season_type
 , ws.game_id
-, cm_t.target
+, cm_t.target as team
 , ws.opponent_team
 , ws.completions
 , ws.attempts
@@ -149,6 +149,6 @@ select
 , ws.pt_net_yards
 , ws.fantasy_points
 , ws.fantasy_points_ppr
-from read_parquet('s3://fantasy-football-dev-808943963151-ca-central-1-an/bronze/weekly_stats/season=*/weekly_stats.parquet', union_by_name = true) ws
-left outer join read_csv('s3://fantasy-football-dev-808943963151-ca-central-1-an/mappings/club_mapping.csv') cm_t
+from read_parquet('${bucket}/bronze/weekly_stats/season=*/weekly_stats.parquet', union_by_name = true) ws
+left outer join read_csv('${bucket}/mappings/club_mapping.csv') cm_t
   on ws.team = cm_t.source
