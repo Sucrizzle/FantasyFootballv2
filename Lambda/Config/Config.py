@@ -110,6 +110,29 @@ def _validate_teams(body: dict) -> tuple[dict | None, str | None]:
     return {"teams": teams}, None
 
 
+def _validate_roster_positions(body: dict) -> tuple[dict | None, str | None]:
+    slots = body.get("slots")
+    if not isinstance(slots, list) or not slots:
+        return None, "`slots` must be a non-empty list."
+
+    seen = set()
+    for row in slots:
+        if not isinstance(row, dict) or "slot_name" not in row or "count" not in row or "eligible_positions" not in row:
+            return None, "Each slot needs `slot_name`, `count`, and `eligible_positions`."
+        if not isinstance(row["slot_name"], str) or not row["slot_name"].strip():
+            return None, "`slot_name` must be a non-empty string."
+        if not isinstance(row["count"], int) or isinstance(row["count"], bool) or row["count"] < 1:
+            return None, f"`count` for '{row['slot_name']}' must be a positive integer."
+        positions = row["eligible_positions"]
+        if not isinstance(positions, list) or not positions or not all(isinstance(p, str) and p.strip() for p in positions):
+            return None, f"`eligible_positions` for '{row['slot_name']}' must be a non-empty list of position strings."
+        if row["slot_name"] in seen:
+            return None, f"Duplicate slot name '{row['slot_name']}'."
+        seen.add(row["slot_name"])
+
+    return {"slots": slots}, None
+
+
 # Adding a new config type is just adding an entry here - `validate` checks
 # and normalizes a PUT body, `default` is what GET returns before anyone's
 # ever saved a value for that name.
@@ -124,6 +147,26 @@ CONFIG_REGISTRY = {
         # separate number - this list IS the source of truth for both the
         # roster of teams the draft board needs and how many there are.
         "default": {"teams": []},
+    },
+    "roster_positions": {
+        "validate": _validate_roster_positions,
+        # FLEX/SUPERFLEX aren't special-cased anywhere - they're just a
+        # slot whose eligible_positions has more than one entry. A normal
+        # RB slot is eligible_positions=["RB"]; FLEX is
+        # eligible_positions=["RB","WR","TE"]; SUPERFLEX adds "QB" to that
+        # list. Whatever reads this (the draft-need heuristic on the
+        # frontend) just checks "is this player's position in this slot's
+        # eligible_positions", the same check regardless of slot type.
+        "default": {"slots": [
+            {"slot_name": "QB", "count": 1, "eligible_positions": ["QB"]},
+            {"slot_name": "RB", "count": 2, "eligible_positions": ["RB"]},
+            {"slot_name": "WR", "count": 2, "eligible_positions": ["WR"]},
+            {"slot_name": "TE", "count": 1, "eligible_positions": ["TE"]},
+            {"slot_name": "FLEX", "count": 1, "eligible_positions": ["RB", "WR", "TE"]},
+            {"slot_name": "DST", "count": 1, "eligible_positions": ["DST"]},
+            {"slot_name": "K", "count": 1, "eligible_positions": ["K"]},
+            {"slot_name": "BENCH", "count": 6, "eligible_positions": ["QB", "RB", "WR", "TE", "DST", "K"]},
+        ]},
     },
 }
 
