@@ -93,6 +93,7 @@ function PlayerDetailPanel({ row }) {
   const projectedPct = Math.min((row.proj_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const replacementPct = Math.min((row.r_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const barColor = row.team_color || 'var(--accent)'
+  const isAboveReplacement = row.proj_fpts_pg >= row.r_fpts_pg
 
   return (
     <div className="draft-detail-panel">
@@ -114,7 +115,13 @@ function PlayerDetailPanel({ row }) {
               title={`Replacement level: ${fixed2(row.r_fpts_pg)}`}
             />
           </div>
-          <span className="draft-detail-bar-value">{fixed2(row.proj_fpts_pg)}</span>
+          <span
+            className={`draft-detail-bar-value ${
+              isAboveReplacement ? 'draft-detail-bar-value-positive' : 'draft-detail-bar-value-negative'
+            }`}
+          >
+            {fixed2(row.proj_fpts_pg)}
+          </span>
         </div>
 
         <p className="draft-detail-legend">

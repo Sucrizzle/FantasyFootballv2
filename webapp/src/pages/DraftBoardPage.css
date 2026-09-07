@@ -144,6 +144,15 @@
   flex-shrink: 0;
   text-align: right;
   font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.draft-detail-bar-value-positive {
+  color: var(--success);
+}
+
+.draft-detail-bar-value-negative {
+  color: var(--error);
 }
 
 .draft-detail-legend {
