@@ -3,6 +3,7 @@ with raw_stats as
 	select
 	  s.season || '-' || RIGHT('0' || s.week,2) as week_id
 	, s.season || '-' || RIGHT('0' || s.week,2) || '-' || s.away_team || '-' || s.home_team as game_id
+	, ws.team
 	, case 
 	    when ws.team = s.home_team then 'Home'	
 	    when ws.team = s.away_team then 'Away'

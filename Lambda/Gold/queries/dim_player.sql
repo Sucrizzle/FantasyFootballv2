@@ -144,8 +144,13 @@ select
     -- is no "next" row to point to.
     case when cr.on_current_roster then '9999-99' else r.last_seen_week_id end
   ) as end_week_id
-, COALESCE(cr.on_current_roster, false) as on_current_roster
-, COALESCE(cr.on_active_roster, false) as on_active_roster
+-- current_roster is keyed only by gsis_id, so without this guard every
+-- historical version row for a still-rostered player would show these as
+-- true, not just their current version. Only the open/most-recent version
+-- (no next_start_week_id) can ever be true; every earlier version is
+-- unconditionally false, regardless of the player's actual current status.
+, r.next_start_week_id is null and COALESCE(cr.on_current_roster, false) as on_current_roster
+, r.next_start_week_id is null and COALESCE(cr.on_active_roster, false) as on_active_roster
 from ranged r
 left outer join current_roster cr
   on r.gsis_id = cr.gsis_id
