@@ -69,7 +69,7 @@ dst_replacement_level as (
 ),
 
 off_season as (
-  select ss.season, ss.gsis_id, dp.position, ss.fpts_pg
+  select ss.season, ss.gsis_id, dp.position, ss.fpts_pg, ss.games_played
   from read_parquet('${bucket}/gold/facts/fact_player_stats_season.parquet', union_by_name = true) ss
   join read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
     on ss.gsis_id = dp.gsis_id
@@ -91,21 +91,30 @@ off_weighted as (
     , os.season
     , os.position
     , os.fpts_pg
-    , power(0.60, (m.season - os.season)) as weight
+    , os.games_played
+    , power(0.60, (m.season - os.season)) as decay
     FROM off_season os
     CROSS JOIN off_most_recent_completed m
     WHERE os.season <= m.season
 ),
 
--- NEW: collapse to one weighted_sum + total_weight per player, instead of
--- going straight to a weighted average. total_weight becomes the confidence
--- term in the shrinkage blend below.
+-- total_weight is expressed in decayed GAMES, not decayed seasons - a
+-- season-only weight caps at ~2.5 (the 0.6-decay geometric series' ceiling)
+-- regardless of career length, which is meaningless next to a k_value
+-- meant as "total number of games" of baseline confidence (see chat: the
+-- original bug here was exactly this unit mismatch, not k_value's actual
+-- number). Weighting by games_played per season also means a partial/
+-- injury-shortened season contributes less than a full one, which
+-- season-only decay couldn't express at all. A multi-season veteran's
+-- total_weight now realistically lands in the 30-40+ range (several
+-- seasons' worth of games, discounted for recency), comfortably dwarfing
+-- a k_value around 17-20 (one season's worth) the way it should.
 off_own_weighted_agg as (
     select
       gsis_id
     , position
-    , sum(fpts_pg * weight) as weighted_sum
-    , sum(weight) as total_weight
+    , sum(fpts_pg * games_played * decay) as weighted_sum
+    , sum(games_played * decay) as total_weight
     from off_weighted
     group by gsis_id, position
 ),
@@ -145,18 +154,32 @@ off_k_config as (
 	from read_json('${bucket}/config/k_values.json')
 ),
 
--- MODIFIED: base off every active player (dim_player), left-join history,
--- baseline, and K. Rookies with zero history rows naturally collapse to
--- pure baseline since weighted_sum/total_weight default to 0.
+-- Gated by tenure, per the original design (docs/draft-score-calculation-
+-- map-spec.md) - shrinkage toward a rookie/limited-history baseline
+-- doesn't belong pulling down an established veteran's number, and it was
+-- doing exactly that: total_weight tops out around 2.5 (the 0.6-decay
+-- geometric series' ceiling) while k_value (17-20) dwarfed it, so the
+-- baseline was overwhelming every player's own real production, not just
+-- rookies. year_3_plus veterans now use their own weighted average outright
+-- - only rookie/year_2 (genuinely limited history) go through the blend.
+-- The nullif/coalesce fallback covers the rare veteran with zero weighted
+-- history at all (e.g. returning from a full season out of the league) -
+-- falls back to baseline rather than leaving proj_fpts_pg NULL.
 off_proj_fpts_pg as (
     select
       dp.gsis_id
     , dp.position
     , try_cast(
-        (coalesce(w.weighted_sum, 0) + k.k_value * coalesce(bl.fpts_pg, 0))
-        / (coalesce(w.total_weight, 0) + k.k_value)
+        case
+          when t.season_number = 'year_3_plus'
+            then coalesce(w.weighted_sum / nullif(w.total_weight, 0), bl.fpts_pg)
+          else (coalesce(w.weighted_sum, 0) + k.k_value * coalesce(bl.fpts_pg, 0))
+               / (coalesce(w.total_weight, 0) + k.k_value)
+        end
       as decimal(10,2)) as proj_fpts_pg
     from read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
+    join off_player_tenure t
+      on t.gsis_id = dp.gsis_id and t.position = dp.position
     left join off_own_weighted_agg w
       on w.gsis_id = dp.gsis_id and w.position = dp.position
     left join off_baseline bl
