@@ -357,9 +357,19 @@ tiered as (
 ),
 
 tier_avg as (
-  select pos, tier, avg(draft_score) as tier_avg_score
+  select pos, tier, avg(draft_score) as tier_avg_score, count(*) as tier_size
   from tiered
   group by pos, tier
+),
+
+-- 1-indexed from best (1) to worst (tier_size) within each tier - the
+-- Lambda needs this to know how many tier-mates sit below a given player
+-- as a buffer before their tier is actually exhausted.
+tier_rank as (
+  select
+    entity_id, pos, tier
+  , row_number() over (partition by pos, tier order by draft_score desc) as rank_within_tier
+  from tiered
 ),
 
 tier_cliff as (
@@ -367,8 +377,25 @@ tier_cliff as (
     t.entity_id
   , t.pos
   , t.tier
-  , t.draft_score - na.tier_avg_score as tier_cliff
+  , ta.tier_size
+  , tr.rank_within_tier
+  -- Per-TIER property (this tier's own average minus the next tier's
+  -- average) - NOT tied to any individual player's exact score anymore.
+  -- The old formula (player's own score minus next tier avg) rewarded
+  -- whoever happened to sit at the TOP of their own tier with the
+  -- biggest number, backwards from the intent that the player LAST in a
+  -- tier (about to fall off, no tier-mates left as a buffer) should show
+  -- the real spike - see chat (Breece Hall vs. Kyren Williams).
+  , ta.tier_avg_score - na.tier_avg_score as tier_gap
+  -- Modulates the tier-level gap by where THIS player sits within their
+  -- own tier: the worst-ranked player (rank = tier_size, nobody left
+  -- below them in-tier) absorbs the full gap; the best-ranked player
+  -- (rank 1, the whole rest of the tier still buffers them) absorbs only
+  -- a small fraction of it.
+  , (ta.tier_avg_score - na.tier_avg_score) * (tr.rank_within_tier::double / ta.tier_size) as tier_cliff
   from tiered t
+  join tier_avg ta on ta.pos = t.pos and ta.tier = t.tier
+  join tier_rank tr on tr.entity_id = t.entity_id and tr.pos = t.pos
   left outer join tier_avg na
     on na.pos = t.pos and na.tier = t.tier + 1
 )
@@ -386,6 +413,9 @@ select
 -- this easier - "why is this player's cliff X" is answerable by eye once
 -- you can see which tier they landed in.
 , tc.tier
+, tc.tier_size
+, tc.rank_within_tier
+, tc.tier_gap
 -- 0 for anyone outside the eligible (top 2x replacement) window, or last
 -- in their position's final tier (no next tier down to fall off a cliff
 -- into) - no real urgency signal for either case.

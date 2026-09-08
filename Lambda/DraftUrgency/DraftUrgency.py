@@ -93,14 +93,6 @@ NEED_STARTER = 1.5
 NEED_BENCH_ONLY = 1.0
 NEED_NO_ROOM = 0.3
 
-# Same scale, but for the USER's own need_multiplier (section 4) - kept
-# separate from the survival-probability need_adjustment constants above
-# since they answer different questions (section 4 up-weights urgency
-# directly; section 3b scales an opponent's probability of taking a pick).
-NEED_MULTIPLIER_STARTER = 1.2
-NEED_MULTIPLIER_BENCH_ONLY = 0.4
-NEED_MULTIPLIER_NO_ROOM = 0.15
-
 # ADP-window size for base_rate - how many of the next best-ADP undrafted
 # players to look at when estimating "what fraction of picks around here
 # tend to be this position." 12 = roughly one round - wide enough for a
@@ -154,6 +146,7 @@ def _load_static_data() -> dict:
         select
           fds.entity_id
         , fds.pos
+        , fds.proj_fpts_pg
         , fds.draft_score
         , fds.tier
         , fds.tier_cliff
@@ -163,11 +156,11 @@ def _load_static_data() -> dict:
           on fds.entity_id = adp.entity_id
     """).fetchall()
 
-    columns = ["entity_id", "pos", "draft_score", "tier", "tier_cliff", "adp_rank"]
+    columns = ["entity_id", "pos", "proj_fpts_pg", "draft_score", "tier", "tier_cliff", "adp_rank"]
     players = []
     for row in rows:
         rec = dict(zip(columns, row))
-        for key in ("draft_score", "tier_cliff"):
+        for key in ("proj_fpts_pg", "draft_score", "tier_cliff"):
             if isinstance(rec[key], decimal.Decimal):
                 rec[key] = float(rec[key])
         if isinstance(rec["adp_rank"], decimal.Decimal):
@@ -279,18 +272,6 @@ def _open_bench_slots_for_position(slot_fill: list[dict], position: str) -> list
     return [s for s in slot_fill if s["slot_name"] == "BENCH" and s["open"] > 0 and position in s["eligible_positions"]]
 
 
-def _need_multiplier(position: str, picks: list[dict], team: str, roster_positions: list[dict]) -> float:
-    """Section 4: does this position fill a currently open STARTING slot on
-    the user's own roster right now (elevated), only bench depth (reduced),
-    or nothing at all (further reduced)."""
-    slot_fill = _compute_slot_fill(picks, team, roster_positions)
-    if _open_starting_slots_for_position(slot_fill, position):
-        return NEED_MULTIPLIER_STARTER
-    if _open_bench_slots_for_position(slot_fill, position):
-        return NEED_MULTIPLIER_BENCH_ONLY
-    return NEED_MULTIPLIER_NO_ROOM
-
-
 def _base_rate(position: str, pick_number: int, undrafted_players: list[dict]) -> float:
     """League-wide baseline: of the next BASE_RATE_WINDOW best-ADP
     undrafted players from this pick onward, what fraction play this
@@ -326,7 +307,7 @@ def _tendency_adjustment(team: str, position: str, team_picks: list[dict], adp_b
     return max(0.5, min(1.5, 1.0 - avg_delta * 0.02))
 
 
-def _compute_survival_probability(
+def _compute_position_pick_forecast(
     position: str,
     pick_number: int,
     picks: list[dict],
@@ -335,10 +316,17 @@ def _compute_survival_probability(
     my_team: str,
     roster_positions: list[dict],
     adp_by_entity: dict[str, int],
-) -> float:
-    """Section 3: P(a player at `position` survives to the user's next
-    turn) = product over every real pick between now and then of
-    (1 - that pick's probability of being this position).
+) -> tuple[float, float]:
+    """Section 3, generalized: walks the picks between now and the user's
+    next turn and returns (survive_prob, expected_picks) for `position` -
+    survive_prob is P(nobody takes this position at all) on its own;
+    expected_picks is the sum of per-pick rates, i.e. the expected NUMBER
+    of this-position picks before the user's turn. _player_survival_
+    probability below turns expected_picks into a genuinely per-PLAYER
+    number by comparing it against a specific player's own rank at the
+    position - this function only computes the position-level forecast
+    once (shared across every player at that position), not once per
+    player.
 
     Walked SEQUENTIALLY with running per-team state, not evaluated
     independently per team - required per section 3d, since a team picking
@@ -357,14 +345,27 @@ def _compute_survival_probability(
     if not n_until:
         # No real gap to forecast (already my turn, or draft_order/my_team
         # not configured) - nothing stands between now and "my turn," so
-        # survival is certain.
-        return 1.0
+        # survival is certain and nobody's expected to be picked.
+        return 1.0, 0.0
 
     team_picks: dict[str, list[dict]] = {t: [p for p in picks if p["team"] == t] for t in team_order}
     probable_extra_filled: dict[str, float] = {t: 0.0 for t in team_order}
 
+    # n_until picks separate now from my next turn - that's pick_number
+    # itself (whoever's on the clock RIGHT NOW) through pick_number +
+    # n_until - 1, since pick_number + n_until is my own turn (that's
+    # literally how _picks_until_next_turn found n_until). Starting the
+    # walk at pick_number + 1 instead of pick_number was a real bug: it
+    # silently skipped the very next pick every time, which is invisible
+    # when n_until is large (one missed pick out of many) but total when
+    # n_until == 1 - the walk's only "iteration" would land on my own turn,
+    # get correctly skipped as not-a-threat, and leave zero picks
+    # evaluated at all, defaulting every survival_probability to 1.0 and
+    # every urgency_score to 0.00 - exactly the reported bug ("every time
+    # the team before is on the board, urgency is 0.00").
     survive_prob = 1.0
-    for offset in range(1, n_until + 1):
+    expected_picks = 0.0
+    for offset in range(0, n_until):
         pick_n = pick_number + offset
         team = _compute_on_the_clock(team_order, draft_type, pick_n)
         if team is None or team == my_team:
@@ -388,9 +389,68 @@ def _compute_survival_probability(
         rate = max(0.0, min(1.0, rate))
 
         survive_prob *= (1 - rate)
+        expected_picks += rate
         probable_extra_filled[team] += rate
 
-    return survive_prob
+    return survive_prob, expected_picks
+
+
+def _player_survival_probability(candidate: dict, position_pool: list[dict], expected_picks: float) -> float:
+    """P(this specific player - or, equivalently, nobody at least this
+    good - survives to the user's next turn). Reframes the position-level
+    expected_picks against THIS player's own rank among currently
+    undrafted players at their position: if expected_picks is much smaller
+    than how many players rank ahead of (or at) this one, survival is
+    likely; if expected_picks meets or exceeds that rank, it isn't. This
+    is what makes survival tier-sensitive without a separate tier-specific
+    walk - a player near the top of the position needs very few picks to
+    be at risk, a player deep down the board needs many, using the exact
+    same position-level forecast either way."""
+    same_position = sorted(
+        (p for p in position_pool if p["pos"] == candidate["pos"]),
+        key=lambda p: -(p["draft_score"] or 0),
+    )
+    rank = next(
+        (i + 1 for i, p in enumerate(same_position) if p["entity_id"] == candidate["entity_id"]),
+        len(same_position) or 1,
+    )
+    return max(0.0, min(1.0, 1 - expected_picks / rank))
+
+
+def _optimal_lineup_ppg(players: list[dict], roster_positions: list[dict]) -> float:
+    """Greedy value-maximizing lineup assignment: highest proj_fpts_pg
+    gets first claim on the most specific still-open eligible slot (same
+    iteration order as _compute_slot_fill, but by value instead of draft
+    order), summing PPG across non-BENCH assignments only - bench players
+    don't score for you, so they don't count toward team PPG."""
+    ordered_slots = sorted(roster_positions, key=lambda s: len(s["eligible_positions"]))
+    players_sorted = sorted(players, key=lambda p: -(p["proj_fpts_pg"] or 0))
+    assigned = [False] * len(players_sorted)
+
+    total = 0.0
+    for slot in ordered_slots:
+        remaining = slot["count"]
+        for i, p in enumerate(players_sorted):
+            if remaining == 0:
+                break
+            if assigned[i] or p["pos"] not in slot["eligible_positions"]:
+                continue
+            assigned[i] = True
+            remaining -= 1
+            if slot["slot_name"] != "BENCH":
+                total += p["proj_fpts_pg"] or 0
+    return total
+
+
+def _net_ppg_impact(candidate: dict, my_players: list[dict], roster_positions: list[dict]) -> float:
+    """Sections 1+2 combined: how much does MY optimal starting lineup's
+    total PPG change if I add this player, given my ACTUAL current roster
+    - not a generic "is this a need" flag. A redundant position naturally
+    comes out near zero here (the candidate just displaces nobody and ends
+    up on the bench) without needing a separate need_multiplier at all."""
+    without = _optimal_lineup_ppg(my_players, roster_positions)
+    with_candidate = _optimal_lineup_ppg(my_players + [candidate], roster_positions)
+    return with_candidate - without
 
 
 def handler(event, context):
@@ -408,35 +468,57 @@ def handler(event, context):
         undrafted = [p for p in all_players if (p["entity_id"], p["pos"]) not in picked_keys]
         pick_number = len(picks) + 1
 
-        # Survival probability only depends on position, not the specific
-        # player - computed once per position (6 total), not once per
-        # undrafted player (hundreds), then applied to every player at
-        # that position below.
-        survival_by_position = {
-            pos: _compute_survival_probability(
+        # The position-level pick forecast (survive_prob is kept only for
+        # API transparency/troubleshooting; expected_picks is what actually
+        # feeds _player_survival_probability below) is shared across every
+        # undrafted player at that position - computed once per position
+        # (6 total), not once per player (hundreds).
+        forecast_by_position = {
+            pos: _compute_position_pick_forecast(
                 pos, pick_number, picks, undrafted, draft_order, my_team, roster_positions, adp_by_entity,
             )
             for pos in POSITIONS
         }
-        need_by_position = {
-            pos: _need_multiplier(pos, picks, my_team, roster_positions) if my_team else 1.0
-            for pos in POSITIONS
-        }
+
+        # My own current roster, with each pick's proj_fpts_pg looked up -
+        # needed as the baseline _net_ppg_impact compares "with candidate"
+        # against. Picks only carry entity_id/pos/team from DynamoDB, not
+        # proj_fpts_pg, so this joins them against the same static player
+        # data everything else here uses.
+        players_by_key = {(p["entity_id"], p["pos"]): p for p in all_players}
+        my_players = []
+        if my_team:
+            for pick in picks:
+                if pick["team"] != my_team:
+                    continue
+                player = players_by_key.get((pick["entity_id"], pick["pos"]))
+                my_players.append({"pos": pick["pos"], "proj_fpts_pg": player["proj_fpts_pg"] if player else 0})
 
         results = []
         for p in undrafted:
-            survival = survival_by_position.get(p["pos"], 1.0)
-            need = need_by_position.get(p["pos"], 1.0)
+            survival_prob, expected_picks = forecast_by_position.get(p["pos"], (1.0, 0.0))
+            player_survival = _player_survival_probability(p, undrafted, expected_picks)
+            net_impact = _net_ppg_impact(p, my_players, roster_positions) if my_team else 0.0
             tier_cliff = p["tier_cliff"] or 0.0
-            urgency_score = tier_cliff * (1 - survival) * need
+
+            # Three distinct, complementary factors: net_impact is how much
+            # drafting them helps MY team right now (folds in "is this a
+            # need" - a redundant position naturally nets ~0 here); (1 -
+            # player_survival) is how likely I am to lose access to a
+            # player this good if I wait; tier_cliff is how much worse my
+            # fallback would be if that actually happens. See chat
+            # (docs/realtime-urgency-scoring-spec.md's replacement).
+            urgency_score = net_impact * (1 - player_survival) * tier_cliff
+
             results.append({
                 "entity_id": p["entity_id"],
                 "pos": p["pos"],
                 "draft_score": p["draft_score"],
                 "tier": p["tier"],
                 "tier_cliff": tier_cliff,
-                "survival_probability": round(survival, 4),
-                "need_multiplier": need,
+                "position_survival_probability": round(survival_prob, 4),
+                "survival_probability": round(player_survival, 4),
+                "net_ppg_impact": round(net_impact, 2),
                 "urgency_score": round(urgency_score, 4),
             })
 
