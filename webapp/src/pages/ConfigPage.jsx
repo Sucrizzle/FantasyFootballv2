@@ -10,6 +10,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const SCORING_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/scoring` : null
 const TEAMS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/teams` : null
 const ROSTER_POSITIONS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
+const K_VALUES_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/k_values` : null
 const MY_TEAM_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : null
 const DRAFT_ORDER_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/draft_order` : null
 const DRAFT_STATE_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-state` : null
@@ -552,7 +553,78 @@ function RosterPositionsPanel({ initialSlots }) {
   )
 }
 
-const TAB_KEYS = ['scoring', 'teams', 'draft-setup', 'roster-positions']
+// Per-position shrinkage constant for blending a limited-history/rookie
+// player's thin stats with the dim_rookie_baseline lookup (see
+// docs/draft-score-calculation-map-spec.md) - unrelated to the K/kicker
+// position despite the name collision.
+function KValuesPanel({ initialValues }) {
+  const { value: values, setValue: setValues, hasChanges, saveStatus, message, save, cancel } =
+    useSavablePanel(initialValues, async (values) => {
+      const cleaned = values.map((row) => ({ position: row.position, k_value: Number(row.k_value) }))
+      const res = await fetch(K_VALUES_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ values: cleaned }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    })
+
+  function updateKValue(index, k_value) {
+    setValues((prev) => prev.map((row, i) => (i === index ? { ...row, k_value } : row)))
+  }
+
+  function updatePosition(index, position) {
+    setValues((prev) => prev.map((row, i) => (i === index ? { ...row, position } : row)))
+  }
+
+  function removeRow(index) {
+    setValues((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function addRow() {
+    setValues((prev) => [...prev, { position: '', k_value: 0 }])
+  }
+
+  return (
+    <section className="config-panel">
+      <h3>K Values</h3>
+      <p className="config-panel-description">
+        Shrinkage weighting constant per position, used when blending a
+        limited-history or rookie player's own thin stats with the
+        historical baseline for their draft slot. Editing this doesn't
+        recompute anything by itself - re-run Gold from the Pipeline page
+        afterward to apply it.
+      </p>
+
+      {values.map((row, i) => (
+        <div className="config-form-row" key={i}>
+          <input
+            type="text"
+            placeholder="position"
+            value={row.position}
+            onChange={(e) => updatePosition(i, e.target.value)}
+          />
+          <input
+            type="number"
+            step="any"
+            placeholder="k-value"
+            value={row.k_value}
+            onChange={(e) => updateKValue(i, e.target.value)}
+          />
+          <button type="button" onClick={() => removeRow(i)}>Remove</button>
+        </div>
+      ))}
+
+      <button type="button" onClick={addRow}>Add Position</button>
+
+      <SaveCancelActions hasChanges={hasChanges} saveStatus={saveStatus} message={message} onSave={save} onCancel={cancel} />
+    </section>
+  )
+}
+
+const TAB_KEYS = ['scoring', 'teams', 'draft-setup', 'roster-positions', 'k-values']
 
 export default function ConfigPage() {
   const [activeTab, setActiveTab] = useState(TAB_KEYS[0])
@@ -573,6 +645,7 @@ export default function ConfigPage() {
         myTeam: MY_TEAM_API_URL,
         draftOrder: DRAFT_ORDER_API_URL,
         rosterPositions: ROSTER_POSITIONS_API_URL,
+        kValues: K_VALUES_API_URL,
       }
 
       if (Object.values(urls).some((url) => !url)) {
@@ -583,19 +656,21 @@ export default function ConfigPage() {
 
       try {
         const headers = await authHeaders()
-        const [scoringRes, teamsRes, myTeamRes, draftOrderRes, rosterPositionsRes] = await Promise.all([
+        const [scoringRes, teamsRes, myTeamRes, draftOrderRes, rosterPositionsRes, kValuesRes] = await Promise.all([
           fetch(urls.scoring, { headers }),
           fetch(urls.teams, { headers }),
           fetch(urls.myTeam, { headers }),
           fetch(urls.draftOrder, { headers }),
           fetch(urls.rosterPositions, { headers }),
+          fetch(urls.kValues, { headers }),
         ])
-        const [scoringBody, teamsBody, myTeamBody, draftOrderBody, rosterPositionsBody] = await Promise.all([
+        const [scoringBody, teamsBody, myTeamBody, draftOrderBody, rosterPositionsBody, kValuesBody] = await Promise.all([
           scoringRes.json(),
           teamsRes.json(),
           myTeamRes.json(),
           draftOrderRes.json(),
           rosterPositionsRes.json(),
+          kValuesRes.json(),
         ])
 
         for (const [res, body] of [
@@ -604,6 +679,7 @@ export default function ConfigPage() {
           [myTeamRes, myTeamBody],
           [draftOrderRes, draftOrderBody],
           [rosterPositionsRes, rosterPositionsBody],
+          [kValuesRes, kValuesBody],
         ]) {
           if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
         }
@@ -638,6 +714,7 @@ export default function ConfigPage() {
             count: s.count,
             eligible_positions: (s.eligible_positions || []).join(','),
           })),
+          kValues: kValuesBody.values || [],
         })
         setLoadStatus('ready')
       } catch (err) {
@@ -665,6 +742,7 @@ export default function ConfigPage() {
               teams: 'Teams',
               'draft-setup': 'Draft Setup',
               'roster-positions': 'Roster Positions',
+              'k-values': 'K Values',
             }[key]}
           </button>
         ))}
@@ -686,6 +764,7 @@ export default function ConfigPage() {
             />
           )}
           {activeTab === 'roster-positions' && <RosterPositionsPanel initialSlots={data.slots} />}
+          {activeTab === 'k-values' && <KValuesPanel initialValues={data.kValues} />}
         </>
       )}
     </div>

@@ -149,6 +149,28 @@ def _validate_roster_positions(body: dict) -> tuple[dict | None, str | None]:
     return {"slots": slots}, None
 
 
+def _validate_k_values(body: dict) -> tuple[dict | None, str | None]:
+    values = body.get("values")
+    if not isinstance(values, list) or not values:
+        return None, "`values` must be a non-empty list."
+
+    seen = set()
+    for row in values:
+        if not isinstance(row, dict) or "position" not in row or "k_value" not in row:
+            return None, "Each entry needs a `position` (string) and `k_value` (number)."
+        if not isinstance(row["position"], str) or not row["position"].strip():
+            return None, "`position` must be a non-empty string."
+        try:
+            float(row["k_value"])
+        except (TypeError, ValueError):
+            return None, f"`k_value` for '{row['position']}' must be a number."
+        if row["position"] in seen:
+            return None, f"Duplicate position '{row['position']}'."
+        seen.add(row["position"])
+
+    return {"values": values}, None
+
+
 def _config_key(name: str) -> str:
     return f"config/{name}.json"
 
@@ -230,6 +252,15 @@ CONFIG_REGISTRY = {
             {"slot_name": "K", "count": 1, "eligible_positions": ["K"]},
             {"slot_name": "BENCH", "count": 6, "eligible_positions": ["QB", "RB", "WR", "TE", "DST", "K"]},
         ]},
+    },
+    "k_values": {
+        "validate": _validate_k_values,
+        # Per-position shrinkage constant for blending a limited-history or
+        # rookie player's own (thin) stats with the dim_rookie_baseline
+        # lookup - see docs/draft-score-calculation-map-spec.md. Unrelated
+        # to the K/kicker position despite the name collision - "k" here is
+        # the shrinkage formula's weighting constant.
+        "default": {"values": []},
     },
 }
 
