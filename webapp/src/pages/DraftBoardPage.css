@@ -315,13 +315,6 @@
   stroke-dasharray: 2 2;
 }
 
-.draft-detail-legend-availability {
-  display: inline-block;
-  width: 0.7rem;
-  height: 0.7rem;
-  border-radius: 50%;
-}
-
 .draft-detail-history-tooltip rect {
   fill: var(--text-h);
 }

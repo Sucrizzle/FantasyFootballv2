@@ -182,13 +182,28 @@ function HistoryChart({ history, replacementValue, projectedValue, color, availa
   // Same x positions as the PPG line (shared index into sortedHistory) -
   // only real history has availability, there's no projected-availability
   // point to add alongside the PPG projection.
-  const availabilityLinePoints = sortedHistory
-    .map((h, i) => (h.availability != null ? `${scaleX(i)},${scaleYAvailability(h.availability)}` : null))
+  const availabilityPoints = sortedHistory
+    .map((h, i) =>
+      h.availability != null
+        ? { key: `avail-s${h.season}`, x: scaleX(i), y: scaleYAvailability(h.availability), value: h.availability }
+        : null,
+    )
     .filter(Boolean)
-    .join(' ')
+  const availabilityLinePoints = availabilityPoints.map((p) => `${p.x},${p.y}`).join(' ')
   const replacementY = scaleY(replacementValue)
   const hoveredIndex = points.findIndex((p) => p.key === hoveredKey)
-  const hovered = points[hoveredIndex]
+  const hoveredPpg = points[hoveredIndex]
+  const hoveredAvailability = availabilityPoints.find((p) => p.key === hoveredKey)
+  // Shared tooltip for both series - only one dot can be hovered at a time,
+  // so whichever array actually matched hoveredKey wins. PPG values format
+  // via the same fixed2 the rest of the board uses; availability (a 0-1
+  // fraction) uses its own decimal precision so "0.94" doesn't round away
+  // the only digit that matters at this scale.
+  const hovered = hoveredPpg
+    ? { x: scaleX(hoveredIndex), y: scaleY(hoveredPpg.value), label: fixed2(hoveredPpg.value) }
+    : hoveredAvailability
+      ? { x: hoveredAvailability.x, y: hoveredAvailability.y, label: hoveredAvailability.value.toFixed(2) }
+      : null
 
   return (
     <svg
@@ -221,18 +236,18 @@ function HistoryChart({ history, replacementValue, projectedValue, color, availa
         style={{ stroke: availabilityColor }}
         points={availabilityLinePoints}
       />
-      {sortedHistory.map((h, i) =>
-        h.availability != null ? (
-          <circle
-            key={`avail-${h.season}`}
-            className="draft-detail-history-availability-dot"
-            style={{ fill: availabilityColor }}
-            cx={scaleX(i)}
-            cy={scaleYAvailability(h.availability)}
-            r={3}
-          />
-        ) : null,
-      )}
+      {availabilityPoints.map((p) => (
+        <circle
+          key={p.key}
+          className="draft-detail-history-availability-dot"
+          style={{ fill: availabilityColor }}
+          cx={p.x}
+          cy={p.y}
+          r={3}
+          onMouseEnter={() => setHoveredKey(p.key)}
+          onMouseLeave={() => setHoveredKey((prev) => (prev === p.key ? null : prev))}
+        />
+      ))}
       <text className="draft-detail-history-axis-label-right" x={width - padding} y={padding + 4}>1.00</text>
       <text className="draft-detail-history-axis-label-right" x={width - padding} y={height - padding + 4}>0</text>
 
@@ -284,9 +299,9 @@ function HistoryChart({ history, replacementValue, projectedValue, color, availa
 
       {hovered && (
         <g className="draft-detail-history-tooltip">
-          <rect x={scaleX(hoveredIndex) - 18} y={scaleY(hovered.value) - 24} width={36} height={16} rx={3} />
-          <text x={scaleX(hoveredIndex)} y={scaleY(hovered.value) - 12}>
-            {fixed2(hovered.value)}
+          <rect x={hovered.x - 18} y={hovered.y - 24} width={36} height={16} rx={3} />
+          <text x={hovered.x} y={hovered.y - 12}>
+            {hovered.label}
           </text>
         </g>
       )}
@@ -337,9 +352,6 @@ function PlayerDetailPanel({ row, history }) {
 
         <p className="draft-detail-legend">
           <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
-        </p>
-        <p className="draft-detail-legend">
-          <span className="draft-detail-legend-availability" style={{ background: availabilityColor }} /> Availability (0-1 scale, right axis)
         </p>
 
         <HistoryChart
