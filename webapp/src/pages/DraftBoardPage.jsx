@@ -44,6 +44,16 @@ const fixed2 = (v) => (typeof v === 'number' ? v.toFixed(2) : v)
 // just this one formatting change for draft_score specifically.
 const formatDraftScore = (v) => (typeof v === 'number' ? (v < 0 ? `(${Math.abs(v).toFixed(2)})` : v.toFixed(2)) : v)
 
+// Only player_name's formatter needs the whole row (is_rookie lives
+// alongside it, not on the name itself) - every other column's formatter
+// ignores the second argument.
+const formatPlayerName = (name, row) => (
+  <>
+    {name}
+    {row?.is_rookie && <span className="draft-board-rookie-badge" title="Rookie">R</span>}
+  </>
+)
+
 // Purely a rendering concern, applied after filter/search/sort - see chat:
 // pagination must never change what's searchable, only how much of the
 // already-filtered/sorted result renders at once.
@@ -53,7 +63,7 @@ const DEFAULT_PAGE_SIZE = 15
 const COLUMNS = [
   { key: 'pos', label: 'Pos' },
   { key: 'team', label: 'Team' },
-  { key: 'player_name', label: 'Player_Name' },
+  { key: 'player_name', label: 'Player_Name', format: formatPlayerName },
   { key: 'proj_fpts_pg', label: 'Proj PPG', format: fixed2 },
   { key: 'draft_score', label: 'Draft Score', format: formatDraftScore },
 ]
@@ -125,7 +135,7 @@ const CHART_MAX_PPG = 30
 // trust "tall" means the same thing in both charts within one panel.
 const HISTORY_SEASON_COUNT = 5
 
-function HistoryChart({ history, replacementValue, projectedValue, color }) {
+function HistoryChart({ history, replacementValue, projectedValue, color, availabilityColor }) {
   const [hoveredKey, setHoveredKey] = useState(null)
 
   const hasProjection = typeof projectedValue === 'number'
@@ -161,8 +171,21 @@ function HistoryChart({ history, replacementValue, projectedValue, color }) {
     padding + (points.length === 1 ? 0 : (i / (points.length - 1)) * (width - padding * 2))
   const scaleY = (v) =>
     height - padding - (Math.min(v, CHART_MAX_PPG) / CHART_MAX_PPG) * (height - padding * 2)
+  // Separate 0-1 domain sharing the same pixel range as the PPG axis, so
+  // availability's 1.00 lands on the exact same top pixel as CHART_MAX_PPG
+  // does for PPG - a genuine second scale on the same chart, not PPG
+  // rescaled to fit availability's range.
+  const scaleYAvailability = (v) =>
+    height - padding - (Math.min(v, 1) / 1) * (height - padding * 2)
 
   const historyLinePoints = sortedHistory.map((h, i) => `${scaleX(i)},${scaleY(h.fpts_pg)}`).join(' ')
+  // Same x positions as the PPG line (shared index into sortedHistory) -
+  // only real history has availability, there's no projected-availability
+  // point to add alongside the PPG projection.
+  const availabilityLinePoints = sortedHistory
+    .map((h, i) => (h.availability != null ? `${scaleX(i)},${scaleYAvailability(h.availability)}` : null))
+    .filter(Boolean)
+    .join(' ')
   const replacementY = scaleY(replacementValue)
   const hoveredIndex = points.findIndex((p) => p.key === hoveredKey)
   const hovered = points[hoveredIndex]
@@ -187,6 +210,31 @@ function HistoryChart({ history, replacementValue, projectedValue, color }) {
           on their own. */}
       <polyline className="draft-detail-history-line-halo" points={historyLinePoints} />
       <polyline className="draft-detail-history-line" style={{ stroke: color }} points={historyLinePoints} />
+
+      {/* Availability - second line, own 0-1 scale (see scaleYAvailability
+          above). Uses the team's secondary color (team_color2), not the
+          primary team_color the PPG line already uses - two lines the same
+          color on the same chart would be indistinguishable. */}
+      <polyline className="draft-detail-history-availability-line-halo" points={availabilityLinePoints} />
+      <polyline
+        className="draft-detail-history-availability-line"
+        style={{ stroke: availabilityColor }}
+        points={availabilityLinePoints}
+      />
+      {sortedHistory.map((h, i) =>
+        h.availability != null ? (
+          <circle
+            key={`avail-${h.season}`}
+            className="draft-detail-history-availability-dot"
+            style={{ fill: availabilityColor }}
+            cx={scaleX(i)}
+            cy={scaleYAvailability(h.availability)}
+            r={3}
+          />
+        ) : null,
+      )}
+      <text className="draft-detail-history-axis-label-right" x={width - padding} y={padding + 4}>1.00</text>
+      <text className="draft-detail-history-axis-label-right" x={width - padding} y={height - padding + 4}>0</text>
 
       {hasProjection && sortedHistory.length > 0 && (
         <>
@@ -250,6 +298,7 @@ function PlayerDetailPanel({ row, history }) {
   const projectedPct = Math.min((row.proj_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const replacementPct = Math.min((row.r_fpts_pg / CHART_MAX_PPG) * 100, 100)
   const barColor = row.team_color || 'var(--accent)'
+  const availabilityColor = row.team_color2 || 'var(--accent)'
   const isAboveReplacement = row.draft_score >= 0
   // draft_score is already proj_fpts_pg - r_fpts_pg, computed once in SQL
   // - reused directly here rather than resubtracting client-side, so this
@@ -289,10 +338,14 @@ function PlayerDetailPanel({ row, history }) {
         <p className="draft-detail-legend">
           <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
         </p>
+        <p className="draft-detail-legend">
+          <span className="draft-detail-legend-availability" style={{ background: availabilityColor }} /> Availability (0-1 scale, right axis)
+        </p>
 
         <HistoryChart
           history={history}
           replacementValue={row.r_fpts_pg}
+          availabilityColor={availabilityColor}
           projectedValue={row.proj_fpts_pg}
           color={barColor}
         />
@@ -553,7 +606,7 @@ export default function DraftBoardPage() {
                     onClick={() => setExpandedKey(isExpanded ? null : key)}
                   >
                     {COLUMNS.map((col) => (
-                      <td key={col.key}>{col.format ? col.format(row[col.key]) : row[col.key]}</td>
+                      <td key={col.key}>{col.format ? col.format(row[col.key], row) : row[col.key]}</td>
                     ))}
                     <td>
                       <button

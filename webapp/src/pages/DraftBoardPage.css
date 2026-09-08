@@ -80,6 +80,19 @@
   color: var(--success);
 }
 
+.draft-board-rookie-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.4;
+  vertical-align: middle;
+}
+
 .draft-board-controls {
   display: flex;
   align-items: center;
@@ -281,6 +294,32 @@
   font-size: 9px;
   fill: var(--panel-muted);
   text-anchor: middle;
+}
+
+.draft-detail-history-axis-label-right {
+  font-size: 9px;
+  fill: var(--panel-muted);
+  text-anchor: end;
+}
+
+.draft-detail-history-availability-line-halo {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 4;
+  stroke-dasharray: 2 2;
+}
+
+.draft-detail-history-availability-line {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+
+.draft-detail-legend-availability {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
 }
 
 .draft-detail-history-tooltip rect {
