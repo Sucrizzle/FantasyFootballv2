@@ -420,6 +420,37 @@ export default function DraftBoardPage() {
     setCurrentPage(1)
   }
 
+  // Urgency depends on live draft state (survival probability shifts with
+  // every real pick, need_multiplier shifts with every pick affecting your
+  // own roster) - unlike the rest of the board data, it goes stale the
+  // instant a pick happens anywhere, not just on page load. Pulled out as
+  // its own function so draftPlayer can call it again after a successful
+  // pick, not just once on mount.
+  //
+  // Independent try/catch, not thrown into whatever caller's error
+  // handling - the board is fully usable without urgency scores (Draft
+  // Score alone still works), so a missing/erroring DraftUrgency Lambda
+  // shouldn't block the page from loading OR a pick from registering.
+  async function refreshUrgency() {
+    if (!DRAFT_URGENCY_API_URL) return
+    try {
+      const session = await fetchAuthSession()
+      const idToken = session.tokens?.idToken?.toString()
+      const urgencyRes = await fetch(DRAFT_URGENCY_API_URL, { headers: { Authorization: idToken } })
+      const urgencyBody = await urgencyRes.json()
+      if (!urgencyRes.ok) throw new Error(urgencyBody.error || `Request failed with status ${urgencyRes.status}`)
+      const byKey = {}
+      for (const u of urgencyBody) {
+        byKey[`${u.entity_id}|${u.pos}`] = u.urgency_score
+      }
+      setUrgencyByKey(byKey)
+    } catch (err) {
+      // Silent - urgency_score just won't populate/update, same as if the
+      // Lambda hasn't been deployed yet.
+      console.warn('Draft urgency unavailable:', err.message)
+    }
+  }
+
   useEffect(() => {
     ;(async () => {
       if (
@@ -473,27 +504,7 @@ export default function DraftBoardPage() {
         setRosterPositions(rosterBody)
         setLoadStatus('ready')
 
-        // Independent try/catch, deliberately not part of the Promise.all/
-        // throw-on-failure block above - the board is fully usable without
-        // urgency scores (Draft Score alone still works), so a missing/
-        // erroring DraftUrgency Lambda shouldn't block the rest of the
-        // page from loading.
-        if (DRAFT_URGENCY_API_URL) {
-          try {
-            const urgencyRes = await fetch(DRAFT_URGENCY_API_URL, { headers })
-            const urgencyBody = await urgencyRes.json()
-            if (!urgencyRes.ok) throw new Error(urgencyBody.error || `Request failed with status ${urgencyRes.status}`)
-            const byKey = {}
-            for (const u of urgencyBody) {
-              byKey[`${u.entity_id}|${u.pos}`] = u.urgency_score
-            }
-            setUrgencyByKey(byKey)
-          } catch (err) {
-            // Silent - urgency_score just won't populate, same as if the
-            // Lambda hasn't been deployed yet.
-            console.warn('Draft urgency unavailable:', err.message)
-          }
-        }
+        await refreshUrgency()
       } catch (err) {
         setLoadStatus('error')
         setMessage(err.message)
@@ -574,6 +585,11 @@ export default function DraftBoardPage() {
       // Append locally rather than refetching the whole picks list - this
       // response already IS the new pick.
       setPicks((prev) => [...prev, body])
+      // Unlike picks, urgency can't be updated locally - survival
+      // probability and need_multiplier both depend on the live draft
+      // state in ways that would require redoing the whole calculation
+      // client-side, so this just asks the Lambda to redo it instead.
+      refreshUrgency()
     } catch (err) {
       setDraftError(err.message)
     }
