@@ -14,6 +14,7 @@ select
 , dt.team_logo_squared as image_url
 , dt.team_color
 , dt.team_color2
+, bool_or(1=1) as is_active
 , bool_or(1=2) as is_rookie
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
@@ -42,6 +43,7 @@ select
 , dp.headshot_url as image_url
 , dt.team_color
 , dt.team_color2
+, dp.on_active_roster as is_active
 , bool_or(dp.rookie_year = ms.max_season) as is_rookie
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
@@ -62,3 +64,4 @@ group by
 , dp.headshot_url
 , dt.team_color
 , dt.team_color2
+, dp.on_active_roster

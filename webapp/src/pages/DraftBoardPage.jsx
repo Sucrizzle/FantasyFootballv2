@@ -44,13 +44,19 @@ const fixed2 = (v) => (typeof v === 'number' ? v.toFixed(2) : v)
 // just this one formatting change for draft_score specifically.
 const formatDraftScore = (v) => (typeof v === 'number' ? (v < 0 ? `(${Math.abs(v).toFixed(2)})` : v.toFixed(2)) : v)
 
-// Only player_name's formatter needs the whole row (is_rookie lives
-// alongside it, not on the name itself) - every other column's formatter
-// ignores the second argument.
+// Only player_name's formatter needs the whole row (is_rookie/is_active
+// live alongside it, not on the name itself) - every other column's
+// formatter ignores the second argument.
+//
+// is_active checked with === false, not just falsy - a player whose
+// dim_player join didn't match at all comes through as null/undefined
+// (unknown), which shouldn't be labeled "not active" the same way a real
+// false does.
 const formatPlayerName = (name, row) => (
   <>
     {name}
     {row?.is_rookie && <span className="draft-board-rookie-badge" title="Rookie">R</span>}
+    {row?.is_active === false && <span className="draft-board-inactive-badge" title="Not on an active roster">NA</span>}
   </>
 )
 

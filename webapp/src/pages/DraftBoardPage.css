@@ -93,6 +93,19 @@
   vertical-align: middle;
 }
 
+.draft-board-inactive-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  background: var(--error);
+  color: var(--bg);
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.4;
+  vertical-align: middle;
+}
+
 .draft-board-controls {
   display: flex;
   align-items: center;
