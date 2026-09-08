@@ -15,6 +15,7 @@ on:
       - "Lambda/DraftBoard/DraftBoard.py"
       - "Lambda/DraftBoard/queries/*"
       - "Lambda/DraftState/DraftState.py"
+      - "Lambda/DraftUrgency/DraftUrgency.py"
       - "Datasets/Mappings/*.csv"
       - ".github/workflows/deploy-FantasyFootballManager.yml"
 
@@ -32,6 +33,7 @@ jobs:
       CONFIG_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-config' || 'fantasy-football-config-dev' }}
       DRAFT_BOARD_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-draft-board' || 'fantasy-football-draft-board-dev' }}
       DRAFT_STATE_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-draft-state' || 'fantasy-football-draft-state-dev' }}
+      DRAFT_URGENCY_FUNCTION_NAME: ${{ github.ref_name == 'main' && 'fantasy-football-draft-urgency' || 'fantasy-football-draft-urgency-dev' }}
       MAPPINGS_BUCKET: ${{ github.ref_name == 'main' && 'fantasy-football-808943963151-ca-central-1-an' || 'fantasy-football-dev-808943963151-ca-central-1-an' }}
     steps:
       - uses: actions/checkout@v4
@@ -154,4 +156,19 @@ jobs:
       - name: Wait for DraftState update to finish
         run: |
           aws lambda wait function-updated --function-name "$DRAFT_STATE_FUNCTION_NAME"
+
+      - name: Package DraftUrgency function code
+        run: |
+          cd Lambda/DraftUrgency
+          zip function.zip DraftUrgency.py
+
+      - name: Deploy DraftUrgency to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name "$DRAFT_URGENCY_FUNCTION_NAME" \
+            --zip-file fileb://Lambda/DraftUrgency/function.zip
+
+      - name: Wait for DraftUrgency update to finish
+        run: |
+          aws lambda wait function-updated --function-name "$DRAFT_URGENCY_FUNCTION_NAME"
 

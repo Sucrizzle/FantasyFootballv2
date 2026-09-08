@@ -10,6 +10,7 @@ const DRAFT_STATE_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-state` : null
 const DRAFT_ORDER_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/draft_order` : null
 const MY_TEAM_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : null
 const ROSTER_POSITIONS_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
+const DRAFT_URGENCY_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-urgency` : null
 
 // Snake reverses team_order every other round; round_robin repeats the
 // same order every round. pick_number is 1-indexed and guaranteed gapless
@@ -72,62 +73,8 @@ const COLUMNS = [
   { key: 'player_name', label: 'Player_Name', format: formatPlayerName },
   { key: 'proj_fpts_pg', label: 'Proj PPG', format: fixed2 },
   { key: 'draft_score', label: 'Draft Score', format: formatDraftScore },
-  { key: 'vona', label: 'VONA', format: formatDraftScore },
+  { key: 'urgency_score', label: 'Urgency', format: formatDraftScore },
 ]
-
-// How many total picks (across all teams) happen before this team is next
-// on the clock, counting from the pick right after `pickNumber` - if
-// `pickNumber` itself is already this team's turn, that current pick is
-// deliberately skipped so this answers "what do I risk losing by NOT
-// drafting right now," not "how far away is the turn I'm already having."
-// Bounded at 1000 lookups - comfortably beyond any real draft length,
-// just a safety net against an infinite loop if draftOrder is malformed.
-function picksUntilNextTurn(draftOrder, pickNumber, team) {
-  if (!team || (draftOrder?.team_order?.length ?? 0) === 0) return null
-  for (let n = pickNumber + 1; n < pickNumber + 1000; n++) {
-    if (computeOnTheClock(draftOrder, n) === team) return n - pickNumber
-  }
-  return null
-}
-
-// VONA (Value Over Next Available): for each position, predicts which
-// currently-undrafted players will be gone by the time `team` is next on
-// the clock - the N best-ADP players among the undrafted pool, N being
-// picksUntilNextTurn - then finds whichever undrafted player at that
-// position has the best draft_score among the ones NOT predicted to be
-// gone (the "survivor"). A row's VONA is its own draft_score minus that
-// survivor's - a high VONA means the drop-off if you don't take this
-// player now is steep; a low/negative one means a comparable option
-// should still be there next turn.
-//
-// Players with no resolved ADP sort last (treated as "not going anytime
-// soon") rather than excluded outright - see chat: ADP only resolves
-// ~300 of ~1000 draftable rows, and the unresolved ones are exactly the
-// deep-bench players nobody's actually racing to draft, so this is the
-// same assumption the underlying data supports.
-function computeVona(undraftedRows, numPicksUntilMyTurn) {
-  const byAdp = [...undraftedRows].sort((a, b) => (a.adp_rank ?? Infinity) - (b.adp_rank ?? Infinity))
-  const predictedGoneKeys = new Set(
-    byAdp.slice(0, numPicksUntilMyTurn ?? 0).map((r) => `${r.entity_id}|${r.pos}`),
-  )
-
-  const survivorScoreByPosition = {}
-  for (const r of undraftedRows) {
-    if (predictedGoneKeys.has(`${r.entity_id}|${r.pos}`)) continue
-    if (survivorScoreByPosition[r.pos] === undefined || r.draft_score > survivorScoreByPosition[r.pos]) {
-      survivorScoreByPosition[r.pos] = r.draft_score
-    }
-  }
-
-  return (row) => {
-    // A replacement-level player's draft_score is ~0 by definition (that's
-    // literally what "replacement level" means) - the sanest fallback for
-    // "this position's entire remaining pool is predicted gone before my
-    // turn," rather than mixing in raw r_fpts_pg units.
-    const survivorScore = survivorScoreByPosition[row.pos] ?? 0
-    return typeof row.draft_score === 'number' ? row.draft_score - survivorScore : null
-  }
-}
 
 // Standard "dropdown that expands into checkboxes" pattern - a native
 // <select multiple> would technically be a multi-select, but it renders
@@ -437,6 +384,11 @@ export default function DraftBoardPage() {
   const [draftOrder, setDraftOrder] = useState({ draft_type: 'snake', team_order: [] })
   const [myTeam, setMyTeam] = useState(null)
   const [rosterPositions, setRosterPositions] = useState({ slots: [] })
+  // entity_id|pos -> urgency_score, from the DraftUrgency Lambda. Fetched
+  // and failed independently of the rest of the board (see below) - it's
+  // a live recommendation layer on top of the board, not core data the
+  // page can't function without.
+  const [urgencyByKey, setUrgencyByKey] = useState({})
   const [draftError, setDraftError] = useState('')
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
   const [message, setMessage] = useState('')
@@ -520,6 +472,28 @@ export default function DraftBoardPage() {
         setMyTeam(myTeamBody.team_name ?? null)
         setRosterPositions(rosterBody)
         setLoadStatus('ready')
+
+        // Independent try/catch, deliberately not part of the Promise.all/
+        // throw-on-failure block above - the board is fully usable without
+        // urgency scores (Draft Score alone still works), so a missing/
+        // erroring DraftUrgency Lambda shouldn't block the rest of the
+        // page from loading.
+        if (DRAFT_URGENCY_API_URL) {
+          try {
+            const urgencyRes = await fetch(DRAFT_URGENCY_API_URL, { headers })
+            const urgencyBody = await urgencyRes.json()
+            if (!urgencyRes.ok) throw new Error(urgencyBody.error || `Request failed with status ${urgencyRes.status}`)
+            const byKey = {}
+            for (const u of urgencyBody) {
+              byKey[`${u.entity_id}|${u.pos}`] = u.urgency_score
+            }
+            setUrgencyByKey(byKey)
+          } catch (err) {
+            // Silent - urgency_score just won't populate, same as if the
+            // Lambda hasn't been deployed yet.
+            console.warn('Draft urgency unavailable:', err.message)
+          }
+        }
       } catch (err) {
         setLoadStatus('error')
         setMessage(err.message)
@@ -557,11 +531,9 @@ export default function DraftBoardPage() {
   // undo-last-only), so the next pick number is always just the count.
   const pickNumber = picks.length + 1
   const onTheClock = computeOnTheClock(draftOrder, pickNumber)
-  const numPicksUntilMyTurn = picksUntilNextTurn(draftOrder, pickNumber, myTeam)
-  const vonaFor = computeVona(undraftedRows, numPicksUntilMyTurn)
 
   const filteredRows = undraftedRows
-    .map((r) => ({ ...r, vona: vonaFor(r) }))
+    .map((r) => ({ ...r, urgency_score: urgencyByKey[`${r.entity_id}|${r.pos}`] ?? null }))
     .filter((r) => selectedPositions === null || selectedPositions.includes(r.pos))
     .filter((r) => (r.player_name ?? '').toLowerCase().includes(searchText.trim().toLowerCase()))
 
