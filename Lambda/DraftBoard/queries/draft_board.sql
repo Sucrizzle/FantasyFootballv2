@@ -16,9 +16,12 @@ select
 , dt.team_color2
 , bool_or(1=1) as is_active
 , bool_or(1=2) as is_rookie
+, adp.ADP as adp_rank
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
   on fds.entity_id = dt.team
+left outer join read_parquet('${bucket}/gold/facts/fact_adp.parquet', union_by_name = true) adp
+  on fds.entity_id = adp.entity_id
 where fds.pos = 'DST'
 group by
   fds.entity_id
@@ -31,7 +34,8 @@ group by
 , dt.team_logo_squared
 , dt.team_color
 , dt.team_color2
- union all 
+, adp.ADP
+ union all
 select
   fds.entity_id
 , fds.pos
@@ -45,15 +49,18 @@ select
 , dt.team_color2
 , dp.on_active_roster as is_active
 , bool_or(dp.rookie_year = ms.max_season) as is_rookie
+, adp.ADP as adp_rank
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
   on fds.entity_id = dp.gsis_id
     and dp.end_week_id = '9999-99'
  left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
   on dp.team = dt.team
+ left outer join read_parquet('${bucket}/gold/facts/fact_adp.parquet', union_by_name = true) adp
+  on fds.entity_id = adp.entity_id
  cross join max_season ms
 where fds.pos <> 'DST'
-group by 
+group by
   fds.entity_id
 , fds.pos
 , dt.team
@@ -65,3 +72,4 @@ group by
 , dt.team_color
 , dt.team_color2
 , dp.on_active_roster
+, adp.ADP

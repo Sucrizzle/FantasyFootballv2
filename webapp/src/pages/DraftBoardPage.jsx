@@ -72,7 +72,62 @@ const COLUMNS = [
   { key: 'player_name', label: 'Player_Name', format: formatPlayerName },
   { key: 'proj_fpts_pg', label: 'Proj PPG', format: fixed2 },
   { key: 'draft_score', label: 'Draft Score', format: formatDraftScore },
+  { key: 'vona', label: 'VONA', format: formatDraftScore },
 ]
+
+// How many total picks (across all teams) happen before this team is next
+// on the clock, counting from the pick right after `pickNumber` - if
+// `pickNumber` itself is already this team's turn, that current pick is
+// deliberately skipped so this answers "what do I risk losing by NOT
+// drafting right now," not "how far away is the turn I'm already having."
+// Bounded at 1000 lookups - comfortably beyond any real draft length,
+// just a safety net against an infinite loop if draftOrder is malformed.
+function picksUntilNextTurn(draftOrder, pickNumber, team) {
+  if (!team || (draftOrder?.team_order?.length ?? 0) === 0) return null
+  for (let n = pickNumber + 1; n < pickNumber + 1000; n++) {
+    if (computeOnTheClock(draftOrder, n) === team) return n - pickNumber
+  }
+  return null
+}
+
+// VONA (Value Over Next Available): for each position, predicts which
+// currently-undrafted players will be gone by the time `team` is next on
+// the clock - the N best-ADP players among the undrafted pool, N being
+// picksUntilNextTurn - then finds whichever undrafted player at that
+// position has the best draft_score among the ones NOT predicted to be
+// gone (the "survivor"). A row's VONA is its own draft_score minus that
+// survivor's - a high VONA means the drop-off if you don't take this
+// player now is steep; a low/negative one means a comparable option
+// should still be there next turn.
+//
+// Players with no resolved ADP sort last (treated as "not going anytime
+// soon") rather than excluded outright - see chat: ADP only resolves
+// ~300 of ~1000 draftable rows, and the unresolved ones are exactly the
+// deep-bench players nobody's actually racing to draft, so this is the
+// same assumption the underlying data supports.
+function computeVona(undraftedRows, numPicksUntilMyTurn) {
+  const byAdp = [...undraftedRows].sort((a, b) => (a.adp_rank ?? Infinity) - (b.adp_rank ?? Infinity))
+  const predictedGoneKeys = new Set(
+    byAdp.slice(0, numPicksUntilMyTurn ?? 0).map((r) => `${r.entity_id}|${r.pos}`),
+  )
+
+  const survivorScoreByPosition = {}
+  for (const r of undraftedRows) {
+    if (predictedGoneKeys.has(`${r.entity_id}|${r.pos}`)) continue
+    if (survivorScoreByPosition[r.pos] === undefined || r.draft_score > survivorScoreByPosition[r.pos]) {
+      survivorScoreByPosition[r.pos] = r.draft_score
+    }
+  }
+
+  return (row) => {
+    // A replacement-level player's draft_score is ~0 by definition (that's
+    // literally what "replacement level" means) - the sanest fallback for
+    // "this position's entire remaining pool is predicted gone before my
+    // turn," rather than mixing in raw r_fpts_pg units.
+    const survivorScore = survivorScoreByPosition[row.pos] ?? 0
+    return typeof row.draft_score === 'number' ? row.draft_score - survivorScore : null
+  }
+}
 
 // Standard "dropdown that expands into checkboxes" pattern - a native
 // <select multiple> would technically be a multi-select, but it renders
@@ -359,6 +414,9 @@ function PlayerDetailPanel({ row, history }) {
         <p className="draft-detail-legend">
           <span className="draft-detail-legend-goal" /> Replacement level ({fixed2(row.r_fpts_pg)})
         </p>
+        <p className="draft-detail-legend">
+          ADP: {typeof row.adp_rank === 'number' ? `#${row.adp_rank}` : 'Unranked'}
+        </p>
 
         <HistoryChart
           history={history}
@@ -493,9 +551,17 @@ export default function DraftBoardPage() {
   // once picked, there's nothing left to decide about them here (edits/undo
   // live on the Draft Log page instead).
   const pickedKeys = new Set(picks.map((p) => `${p.entity_id}|${p.pos}`))
+  const undraftedRows = rows.filter((r) => !pickedKeys.has(`${r.entity_id}|${r.pos}`))
 
-  const filteredRows = rows
-    .filter((r) => !pickedKeys.has(`${r.entity_id}|${r.pos}`))
+  // pick_number is guaranteed gapless by DraftState.py (server-computed,
+  // undo-last-only), so the next pick number is always just the count.
+  const pickNumber = picks.length + 1
+  const onTheClock = computeOnTheClock(draftOrder, pickNumber)
+  const numPicksUntilMyTurn = picksUntilNextTurn(draftOrder, pickNumber, myTeam)
+  const vonaFor = computeVona(undraftedRows, numPicksUntilMyTurn)
+
+  const filteredRows = undraftedRows
+    .map((r) => ({ ...r, vona: vonaFor(r) }))
     .filter((r) => selectedPositions === null || selectedPositions.includes(r.pos))
     .filter((r) => (r.player_name ?? '').toLowerCase().includes(searchText.trim().toLowerCase()))
 
@@ -516,10 +582,6 @@ export default function DraftBoardPage() {
   const safePage = Math.min(currentPage, totalPages)
   const pagedRows = sortedRows.slice((safePage - 1) * pageSize, safePage * pageSize)
 
-  // pick_number is guaranteed gapless by DraftState.py (server-computed,
-  // undo-last-only), so the next pick number is always just the count.
-  const pickNumber = picks.length + 1
-  const onTheClock = computeOnTheClock(draftOrder, pickNumber)
   const myTeamSlotFill = myTeam ? computeSlotFill(picks, myTeam, rosterPositions) : []
 
   async function draftPlayer(row) {
