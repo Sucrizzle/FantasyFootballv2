@@ -6,6 +6,7 @@ with weekly as (
   , r.full_name
   , r.first_name
   , r.last_name
+  , r.position
   , r.birth_date
   , r.height
   , r.weight
@@ -70,6 +71,7 @@ collapsed as (
   , max(first_name) as first_name
   , max(last_name) as last_name
   , max(birth_date) as birth_date
+  , max(position) as position
   , weight
   , height
   , headshot_url
@@ -123,6 +125,7 @@ select
 , r.full_name
 , r.first_name
 , r.last_name
+, r.position
 , r.birth_date
 , r.weight
 , r.height
