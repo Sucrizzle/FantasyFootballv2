@@ -42,7 +42,9 @@ with name_keyed_rosters as (
 
 adp_keyed as (
     select
-      Player
+      ADP
+    , season
+    , Player
     , lower(trim(regexp_replace(
         regexp_replace(Player, '[.'']', '', 'g'),
         '\s+(jr|sr|ii|iii|iv|v)$', '', 'i'
@@ -50,15 +52,12 @@ adp_keyed as (
     from read_csv('${bucket}/bronze/adp/season=2026/4for4-superflex-adp-table.csv')
 )
 
+
 select distinct
-  adp.Player
--- team_name join through club_mapping, not straight to t.team - teams.parquet
--- carries two rows for some franchises (e.g. "Los Angeles Rams" under both
--- 'LA' and 'LAR'), and joining t.team directly fans out into duplicate
--- (Player, entity_id) pairs for the same DST. club_mapping already exists
--- to collapse exactly this (see rosters.sql), so both rows resolve to the
--- same canonical 'LAR' here too.
+  adp.season
+, adp.ADP
 , COALESCE(r.gsis_id, cm.target) as entity_id
+, Player
 from adp_keyed adp
 left outer join name_keyed_rosters r
   on adp.name_key = r.name_key
