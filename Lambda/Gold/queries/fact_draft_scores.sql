@@ -86,24 +86,83 @@ off_most_recent_completed as (
 ),
 
 off_weighted as (
-	SELECT
-	  os.gsis_id
-	, os.season
-	, os.position
-	, os.fpts_pg
-	, power(0.60, (m.season - os.season)) as weight
-	FROM off_season os
-	CROSS JOIN off_most_recent_completed m
-	WHERE os.season <= m.season
+    SELECT
+      os.gsis_id
+    , os.season
+    , os.position
+    , os.fpts_pg
+    , power(0.60, (m.season - os.season)) as weight
+    FROM off_season os
+    CROSS JOIN off_most_recent_completed m
+    WHERE os.season <= m.season
 ),
 
+-- NEW: collapse to one weighted_sum + total_weight per player, instead of
+-- going straight to a weighted average. total_weight becomes the confidence
+-- term in the shrinkage blend below.
+off_own_weighted_agg as (
+    select
+      gsis_id
+    , position
+    , sum(fpts_pg * weight) as weighted_sum
+    , sum(weight) as total_weight
+    from off_weighted
+    group by gsis_id, position
+),
+
+-- NEW: tenure bucket per player, relative to the most recent completed season
+off_player_tenure as (
+    select
+      dp.gsis_id
+    , dp.position
+    , dp.draft_round
+    , case
+        when m.season - dp.rookie_year < 1 then 'rookie'
+        when m.season - dp.rookie_year = 1 then 'year_2'
+        else 'year_3_plus'
+      end as season_number
+    from read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
+    cross join off_most_recent_completed m
+    where dp.end_week_id = '9999-99'
+),
+
+-- NEW: baseline lookup per player, via round + position + tenure bucket
+off_baseline as (
+    select
+      t.gsis_id
+    , b.fpts_pg
+    from off_player_tenure t
+    join read_parquet('${bucket}/gold/dimensions/dim_player_rookie_baseline.parquet', union_by_name = true) b
+      on (b.min_round <= t.draft_round and b.max_round >= t.draft_round)
+     and b.position = t.position
+),
+
+-- NEW: K per position, config-driven, not hardcoded
+off_k_config as (
+  select
+	unnest(values, recursive := true)
+	from read_json('${bucket}/config/k_values.json')
+),
+
+-- MODIFIED: base off every active player (dim_player), left-join history,
+-- baseline, and K. Rookies with zero history rows naturally collapse to
+-- pure baseline since weighted_sum/total_weight default to 0.
 off_proj_fpts_pg as (
-	select
-	  gsis_id
-	, position
-	, try_cast(sum(fpts_pg * weight) / sum(weight) as decimal(10,2)) as proj_fpts_pg
-	from off_weighted
-	group by gsis_id, position
+    select
+      dp.gsis_id
+    , dp.position
+    , try_cast(
+        (coalesce(w.weighted_sum, 0) + k.k_value * coalesce(bl.fpts_pg, 0))
+        / (coalesce(w.total_weight, 0) + k.k_value)
+      as decimal(10,2)) as proj_fpts_pg
+    from read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
+    left join off_own_weighted_agg w
+      on w.gsis_id = dp.gsis_id and w.position = dp.position
+    left join off_baseline bl
+      on bl.gsis_id = dp.gsis_id
+    join off_k_config k
+      on k.position = dp.position
+    where dp.end_week_id = '9999-99'
 ),
 
 off_slot_count as (
