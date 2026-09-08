@@ -203,7 +203,7 @@ off_flex_shares as (
 ),
 
 off_positions as (
-  select unnest(['QB', 'RB', 'WR', 'TE']) as position
+  select unnest(['QB', 'RB', 'WR', 'TE', 'K']) as position
 ),
 
 -- Effective slot count PER POSITION, not per slot_name - a dedicated slot
