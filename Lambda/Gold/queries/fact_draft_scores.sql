@@ -135,6 +135,7 @@ off_baseline as (
     join read_parquet('${bucket}/gold/dimensions/dim_player_rookie_baseline.parquet', union_by_name = true) b
       on (b.min_round <= t.draft_round and b.max_round >= t.draft_round)
      and b.position = t.position
+    where b.game_category = 'Regular Season'
 ),
 
 -- NEW: K per position, config-driven, not hardcoded
