@@ -189,19 +189,57 @@ off_proj_fpts_pg as (
     where dp.end_week_id = '9999-99'
 ),
 
-off_slot_count as (
-  select 
-    slot_name
-  , sum(count) as slots_per_team
-  from roster_positions
-  where list_has_any(eligible_positions, ['QB', 'WR', 'RB', 'TE'])
-    and slot_name != 'BENCH'
+off_flex_shares as (
+  -- Explicit schema, not auto-detected - a league with no FLEX/SUPERFLEX
+  -- slot (like this one, today) saves this as {"shares": []}, and DuckDB
+  -- can't infer a struct's field names from an empty array. Without this,
+  -- fs.slot_name/fs.position below don't exist as columns at all whenever
+  -- the list happens to be empty.
+  select unnest(shares, recursive := true)
+  from read_json(
+    '${bucket}/config/flex_shares.json',
+    columns = {shares: 'STRUCT(slot_name VARCHAR, position VARCHAR, share_pct DOUBLE)[]'}
+  )
+),
+
+off_positions as (
+  select unnest(['QB', 'RB', 'WR', 'TE']) as position
+),
+
+-- Effective slot count PER POSITION, not per slot_name - a dedicated slot
+-- (exactly one eligible position, e.g. QB's own slot) contributes its full
+-- count to that one position. A multi-position slot (FLEX, SUPERFLEX)
+-- contributes count * that position's configured share instead - one FLEX
+-- slot isn't "one whole slot" for RB, WR, AND TE simultaneously, it's one
+-- slot apportioned by expected usage across the positions eligible for it.
+-- This replaces slot_name entirely as the join key into off_replacement_
+-- level below - slot_name was never a real position (SUPERFLEX/FLEX
+-- silently matched nothing there), position always is.
+off_position_slot_count as (
+  select
+    p.position
+  , sum(
+      case
+        when len(rp.eligible_positions) = 1 then rp.count
+        else rp.count * coalesce(fs.share_pct, 0)
+      end
+    ) as slots_per_team
+  from roster_positions rp
+  cross join off_positions p
+  left outer join off_flex_shares fs
+    on fs.slot_name = rp.slot_name and fs.position = p.position
+  where list_contains(rp.eligible_positions, p.position)
+    and rp.slot_name != 'BENCH'
   group by 1
 ),
 
 off_replacement_rank as (
-  select o.slot_name, o.slots_per_team * l.team_count as rank_position
-  from off_slot_count o
+  -- Rounded to the nearest whole rank - fractional shares (e.g. a FLEX
+  -- slot split 50/45/5 across RB/WR/TE) can leave slots_per_team * teams
+  -- non-integer, but row_number() below only ever produces whole numbers,
+  -- so this needs to land on one to actually match a real ranked player.
+  select o.position, round(o.slots_per_team * l.team_count)::integer as rank_position
+  from off_position_slot_count o
   cross join league_size l
 ),
 
@@ -218,7 +256,7 @@ off_replacement_level as (
   select off_ranked.position, off_ranked.proj_fpts_pg as r_fpts_pg
   from off_ranked
   join off_replacement_rank
-    on off_ranked.position = off_replacement_rank.slot_name
+    on off_ranked.position = off_replacement_rank.position
    and off_ranked.rnk = off_replacement_rank.rank_position
 )
 

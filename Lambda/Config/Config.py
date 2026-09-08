@@ -199,6 +199,52 @@ def _validate_my_team(body: dict) -> tuple[dict | None, str | None]:
     return {"team_name": team_name}, None
 
 
+def _validate_flex_shares(body: dict) -> tuple[dict | None, str | None]:
+    shares = body.get("shares")
+    if not isinstance(shares, list):
+        return None, "`shares` must be a list."
+
+    current_slots = {
+        s["slot_name"]: s["eligible_positions"]
+        for s in _read_config("roster_positions").get("slots", [])
+    }
+
+    totals: dict[str, float] = {}
+    seen = set()
+    for row in shares:
+        if not isinstance(row, dict) or "slot_name" not in row or "position" not in row or "share_pct" not in row:
+            return None, "Each entry needs `slot_name`, `position`, and `share_pct`."
+
+        slot_name, position = row["slot_name"], row["position"]
+        if slot_name not in current_slots:
+            return None, f"'{slot_name}' isn't in the current Roster Positions config."
+        if position not in current_slots[slot_name]:
+            return None, f"'{position}' isn't an eligible position for slot '{slot_name}'."
+
+        try:
+            share_pct = float(row["share_pct"])
+        except (TypeError, ValueError):
+            return None, f"`share_pct` for '{slot_name}'/'{position}' must be a number."
+        if not (0 <= share_pct <= 1):
+            return None, f"`share_pct` for '{slot_name}'/'{position}' must be between 0 and 1."
+
+        key = (slot_name, position)
+        if key in seen:
+            return None, f"Duplicate entry for slot '{slot_name}', position '{position}'."
+        seen.add(key)
+        totals[slot_name] = totals.get(slot_name, 0) + share_pct
+
+    # Every multi-position slot's shares must fully account for its one
+    # count - a slot whose shares sum to less than 1 would silently shrink
+    # its own replacement-rank contribution, and more than 1 would inflate
+    # it, in fact_draft_scores.sql's off_position_slot_count.
+    for slot_name, total in totals.items():
+        if abs(total - 1.0) > 0.001:
+            return None, f"Shares for slot '{slot_name}' must sum to 1.0 (currently {total:.3f})."
+
+    return {"shares": shares}, None
+
+
 # Adding a new config type is just adding an entry here - `validate` checks
 # and normalizes a PUT body, `default` is what GET returns before anyone's
 # ever saved a value for that name.
@@ -261,6 +307,19 @@ CONFIG_REGISTRY = {
         # to the K/kicker position despite the name collision - "k" here is
         # the shrinkage formula's weighting constant.
         "default": {"values": []},
+    },
+    "flex_shares": {
+        "validate": _validate_flex_shares,
+        # How a multi-eligible-position slot's count is apportioned across
+        # the positions it's eligible for when computing each position's
+        # replacement rank - see docs/draft-score-calculation-map-spec.md.
+        # A single FLEX slot isn't "one full slot" for RB, WR, and TE all
+        # at once; it's one slot that gets used for whichever position
+        # wins out, apportioned here by expected usage share. Dedicated
+        # single-position slots (QB, RB, ...) don't need an entry at all -
+        # only slots with more than one eligible position (FLEX,
+        # SUPERFLEX) do.
+        "default": {"shares": []},
     },
 }
 

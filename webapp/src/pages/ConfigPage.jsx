@@ -11,6 +11,7 @@ const SCORING_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/scoring` : null
 const TEAMS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/teams` : null
 const ROSTER_POSITIONS_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
 const K_VALUES_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/k_values` : null
+const FLEX_SHARES_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/flex_shares` : null
 const MY_TEAM_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : null
 const DRAFT_ORDER_API_URL = API_BASE_URL ? `${API_BASE_URL}/config/draft_order` : null
 const DRAFT_STATE_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-state` : null
@@ -624,7 +625,88 @@ function KValuesPanel({ initialValues }) {
   )
 }
 
-const TAB_KEYS = ['scoring', 'teams', 'draft-setup', 'roster-positions', 'k-values']
+// How a multi-eligible-position slot's count (FLEX, SUPERFLEX) is
+// apportioned across the positions it's eligible for - one FLEX slot isn't
+// "one whole slot" for RB, WR, and TE simultaneously, it's one slot used
+// for whichever position wins out, split here by expected usage share.
+// Dedicated single-position slots don't need an entry at all.
+function FlexSharesPanel({ initialShares }) {
+  const { value: shares, setValue: setShares, hasChanges, saveStatus, message, save, cancel } =
+    useSavablePanel(initialShares, async (shares) => {
+      const cleaned = shares.map((row) => ({
+        slot_name: row.slot_name,
+        position: row.position,
+        share_pct: Number(row.share_pct),
+      }))
+      const res = await fetch(FLEX_SHARES_API_URL, {
+        method: 'PUT',
+        headers: await authHeaders(),
+        body: JSON.stringify({ shares: cleaned }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
+      return body.message
+    })
+
+  function updateField(index, field, value) {
+    setShares((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
+  }
+
+  function removeRow(index) {
+    setShares((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function addRow() {
+    setShares((prev) => [...prev, { slot_name: '', position: '', share_pct: 0 }])
+  }
+
+  return (
+    <section className="config-panel">
+      <h3>Flex Shares</h3>
+      <p className="config-panel-description">
+        For each FLEX/SUPERFLEX-style slot (a slot with more than one
+        eligible position), what share of that slot's count goes to each
+        eligible position when computing replacement rank. Shares for the
+        same slot must sum to 1.0. Editing this doesn't recompute anything
+        by itself - re-run Gold from the Pipeline page afterward to apply
+        it.
+      </p>
+
+      {shares.map((row, i) => (
+        <div className="config-form-row" key={i}>
+          <input
+            type="text"
+            placeholder="slot name (e.g. FLEX)"
+            value={row.slot_name}
+            onChange={(e) => updateField(i, 'slot_name', e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="position (e.g. RB)"
+            value={row.position}
+            onChange={(e) => updateField(i, 'position', e.target.value)}
+          />
+          <input
+            type="number"
+            step="any"
+            min="0"
+            max="1"
+            placeholder="share (0-1)"
+            value={row.share_pct}
+            onChange={(e) => updateField(i, 'share_pct', e.target.value)}
+          />
+          <button type="button" onClick={() => removeRow(i)}>Remove</button>
+        </div>
+      ))}
+
+      <button type="button" onClick={addRow}>Add Share</button>
+
+      <SaveCancelActions hasChanges={hasChanges} saveStatus={saveStatus} message={message} onSave={save} onCancel={cancel} />
+    </section>
+  )
+}
+
+const TAB_KEYS = ['scoring', 'teams', 'draft-setup', 'roster-positions', 'k-values', 'flex-shares']
 
 export default function ConfigPage() {
   const [activeTab, setActiveTab] = useState(TAB_KEYS[0])
@@ -646,6 +728,7 @@ export default function ConfigPage() {
         draftOrder: DRAFT_ORDER_API_URL,
         rosterPositions: ROSTER_POSITIONS_API_URL,
         kValues: K_VALUES_API_URL,
+        flexShares: FLEX_SHARES_API_URL,
       }
 
       if (Object.values(urls).some((url) => !url)) {
@@ -656,21 +739,23 @@ export default function ConfigPage() {
 
       try {
         const headers = await authHeaders()
-        const [scoringRes, teamsRes, myTeamRes, draftOrderRes, rosterPositionsRes, kValuesRes] = await Promise.all([
+        const [scoringRes, teamsRes, myTeamRes, draftOrderRes, rosterPositionsRes, kValuesRes, flexSharesRes] = await Promise.all([
           fetch(urls.scoring, { headers }),
           fetch(urls.teams, { headers }),
           fetch(urls.myTeam, { headers }),
           fetch(urls.draftOrder, { headers }),
           fetch(urls.rosterPositions, { headers }),
           fetch(urls.kValues, { headers }),
+          fetch(urls.flexShares, { headers }),
         ])
-        const [scoringBody, teamsBody, myTeamBody, draftOrderBody, rosterPositionsBody, kValuesBody] = await Promise.all([
+        const [scoringBody, teamsBody, myTeamBody, draftOrderBody, rosterPositionsBody, kValuesBody, flexSharesBody] = await Promise.all([
           scoringRes.json(),
           teamsRes.json(),
           myTeamRes.json(),
           draftOrderRes.json(),
           rosterPositionsRes.json(),
           kValuesRes.json(),
+          flexSharesRes.json(),
         ])
 
         for (const [res, body] of [
@@ -680,6 +765,7 @@ export default function ConfigPage() {
           [draftOrderRes, draftOrderBody],
           [rosterPositionsRes, rosterPositionsBody],
           [kValuesRes, kValuesBody],
+          [flexSharesRes, flexSharesBody],
         ]) {
           if (!res.ok) throw new Error(body.error || `Request failed with status ${res.status}`)
         }
@@ -715,6 +801,7 @@ export default function ConfigPage() {
             eligible_positions: (s.eligible_positions || []).join(','),
           })),
           kValues: kValuesBody.values || [],
+          flexShares: flexSharesBody.shares || [],
         })
         setLoadStatus('ready')
       } catch (err) {
@@ -743,6 +830,7 @@ export default function ConfigPage() {
               'draft-setup': 'Draft Setup',
               'roster-positions': 'Roster Positions',
               'k-values': 'K Values',
+              'flex-shares': 'Flex Shares',
             }[key]}
           </button>
         ))}
@@ -765,6 +853,7 @@ export default function ConfigPage() {
           )}
           {activeTab === 'roster-positions' && <RosterPositionsPanel initialSlots={data.slots} />}
           {activeTab === 'k-values' && <KValuesPanel initialValues={data.kValues} />}
+          {activeTab === 'flex-shares' && <FlexSharesPanel initialShares={data.flexShares} />}
         </>
       )}
     </div>
