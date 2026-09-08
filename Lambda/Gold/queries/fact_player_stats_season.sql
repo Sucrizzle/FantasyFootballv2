@@ -44,6 +44,8 @@ select
 , try_cast(season_rec_fpts / games_played as decimal(10,2)) as rec_fpts_pg
 , sum(other_fpts) as season_other_fpts
 , try_cast(season_other_fpts / games_played as decimal(10,2)) as other_fpts_pg
+, sum(other_fpts) as season_kicking_fpts
+, try_cast(season_kicking_fpts / games_played as decimal(10,2)) as kicking_fpts_pg
 , sum(off_fpts) as fpts
 , try_cast(fpts / games_played as decimal(10,2)) as fpts_pg
 FROM read_parquet('${bucket}/gold/facts/fact_player_stats_weekly.parquet', union_by_name = true) fpsw
