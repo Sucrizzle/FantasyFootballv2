@@ -22,3 +22,22 @@ select
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
   on fds.entity_id = dt.team
+where fds.pos = 'DST'
+ union all 
+select
+  fds.entity_id
+, fds.pos
+, dt.team
+, dp.full_name as player_name
+, fds.proj_fpts_pg
+, fds.r_fpts_pg
+, fds.draft_score
+, dp.headshot_url as image_url
+, dt.team_color
+from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
+left outer join read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
+  on fds.entity_id = dp.gsis_id
+    and dp.end_week_id = '9999-99'
+ left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
+  on dp.team = dt.team
+where fds.pos <> 'DST'
