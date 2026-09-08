@@ -258,23 +258,138 @@ off_replacement_level as (
   join off_replacement_rank
     on off_ranked.position = off_replacement_rank.position
    and off_ranked.rnk = off_replacement_rank.rank_position
+),
+
+-- Wrapped as a CTE (was the bare final select) so tier_cliff below can
+-- build on top of it - everything from here down operates on the unified
+-- DST+offense pool, not either branch separately.
+draft_scores as (
+  select
+    r.team as entity_id
+  , 'DST' as pos
+  , r.proj_fpts_pg
+  , rl.r_fpts_pg
+  , try_cast(r.proj_fpts_pg - rl.r_fpts_pg as decimal(10,2)) as draft_score
+  from dst_ranked r
+  cross join dst_replacement_level rl
+  union all
+  select
+    r.gsis_id as entity_id
+  , r.position as pos
+  , r.proj_fpts_pg
+  , rl.r_fpts_pg
+  , try_cast(r.proj_fpts_pg - rl.r_fpts_pg as decimal(10,2)) as draft_score
+  from off_ranked r
+  join off_replacement_level rl
+    on r.position = rl.position
+),
+
+-- dst_replacement_rank has no `position` column (it's implicitly DST-only,
+-- one group) while off_replacement_rank has one per offensive position -
+-- union them into one common (pos, rank_position) shape so tier_cliff
+-- below can look up either kind the same way.
+all_replacement_rank as (
+  select 'DST' as pos, rank_position from dst_replacement_rank
+  union all
+  select position as pos, rank_position from off_replacement_rank
+),
+
+ranked_for_tiers as (
+  select
+    entity_id
+  , pos
+  , draft_score
+  , row_number() over (partition by pos order by draft_score desc) as rnk
+  from draft_scores
+),
+
+-- Only the meaningfully-relevant pool per position - top 2x replacement
+-- rank (starters plus realistic bench/handcuff value). Hundreds of deep-
+-- bench players at a position are all bunched within a point or two of
+-- replacement level; including them would swamp the average gap with
+-- near-zero values and make the threshold oversensitive right where it
+-- matters (the top of the board), not just add a few outliers median
+-- would smooth over - the skew is in HOW MANY irrelevant players there
+-- are, not their magnitude.
+eligible_for_tiers as (
+  select rt.entity_id, rt.pos, rt.draft_score, rt.rnk
+  from ranked_for_tiers rt
+  join all_replacement_rank rr on rr.pos = rt.pos
+  where rt.rnk <= 2 * rr.rank_position
+),
+
+-- Banded by distance from the position's own top score, in units of that
+-- position's own draft_score spread - NOT gap-outlier detection (tried
+-- first, dropped). Gap detection only flags a tier break where there's one
+-- *surprising jump* between consecutive players, which misses real
+-- cumulative separation on a position that declines gradually with no
+-- single sharp break - confirmed on DST, where avg_gap + 1 stddev on the
+-- GAPS produced 3 tiers (DEN alone, SEA alone, then everyone else lumped
+-- into one tier spanning a full 2+ points, 1.07 down to -0.97, since no
+-- individual gap in that stretch ever looked "surprising" even though the
+-- total spread clearly wasn't one tier's worth of value). Banding by the
+-- position's own stddev of draft_score instead asks "how far is this
+-- player from the top, relative to how spread out this position actually
+-- is" - it doesn't need a dramatic jump anywhere, so smooth, gradual
+-- declines still get split into real, meaningfully-different bands. 0.75
+-- stddev per tier was tuned by eye against real data across every
+-- position (5-6 tiers each, sensible group sizes, no giant blobs) - see
+-- chat if this ever needs retuning.
+tier_config as (
+  select 0.75 as band_width  -- smaller = more, narrower tiers; larger = fewer, wider tiers
+),
+
+tier_position_stats as (
+  select pos, max(draft_score) as max_score, stddev_samp(draft_score) as stddev_score
+  from eligible_for_tiers
+  group by pos
+),
+
+tiered as (
+  select
+    e.entity_id
+  , e.pos
+  , e.draft_score
+  , 1 + floor((ps.max_score - e.draft_score) / (tc.band_width * ps.stddev_score))::integer as tier
+  from eligible_for_tiers e
+  join tier_position_stats ps on ps.pos = e.pos
+  cross join tier_config tc
+),
+
+tier_avg as (
+  select pos, tier, avg(draft_score) as tier_avg_score
+  from tiered
+  group by pos, tier
+),
+
+tier_cliff as (
+  select
+    t.entity_id
+  , t.pos
+  , t.tier
+  , t.draft_score - na.tier_avg_score as tier_cliff
+  from tiered t
+  left outer join tier_avg na
+    on na.pos = t.pos and na.tier = t.tier + 1
 )
 
 select
-  r.team as entity_id
-, 'DST' as pos
-, r.proj_fpts_pg
-, rl.r_fpts_pg
-, try_cast(r.proj_fpts_pg - rl.r_fpts_pg as decimal(10,2)) as draft_score
-from dst_ranked r
-cross join dst_replacement_level rl
-union all
-select
-  r.gsis_id as entity_id
-, r.position as pos
-, r.proj_fpts_pg
-, rl.r_fpts_pg
-, try_cast(r.proj_fpts_pg - rl.r_fpts_pg as decimal(10,2)) as draft_score
-from off_ranked r
-join off_replacement_level rl
-  on r.position = rl.position
+  ds.entity_id
+, ds.pos
+, ds.proj_fpts_pg
+, ds.r_fpts_pg
+, ds.draft_score
+-- NULL for anyone outside the eligible (top 2x replacement) window - they
+-- were never tiered at all, so a fabricated tier number would be
+-- misleading. Kept alongside tier_cliff (persisted, not just an
+-- intermediate CTE value) specifically to make troubleshooting/consuming
+-- this easier - "why is this player's cliff X" is answerable by eye once
+-- you can see which tier they landed in.
+, tc.tier
+-- 0 for anyone outside the eligible (top 2x replacement) window, or last
+-- in their position's final tier (no next tier down to fall off a cliff
+-- into) - no real urgency signal for either case.
+, coalesce(tc.tier_cliff, 0) as tier_cliff
+from draft_scores ds
+left outer join tier_cliff tc
+  on tc.entity_id = ds.entity_id and tc.pos = ds.pos
