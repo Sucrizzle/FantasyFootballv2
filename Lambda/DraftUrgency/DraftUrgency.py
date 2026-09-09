@@ -1,67 +1,71 @@
 """
 DraftUrgency.py
 
-Live, per-pick "who should I take right now" recommendation. Replaces the
-VONA layer described in docs/vona-scoring-model-spec.md - see
-docs/realtime-urgency-scoring-spec.md for the full design this implements
-(tier-cliff + per-team survival probability + need weighting, combined into
-one urgency_score per undrafted player).
+Live, per-pick "who should I take right now" recommendation.
+
+SCORING MODEL (refactored - replaces the earlier three-factor product):
+
+    urgency_score = P(gone by my next pick) x (impact_now - impact_fallback)
+
+Read as: "the points per game I expect to regret if I pass on this player."
+Both terms are honest quantities:
+
+  - impact_now: how much MY optimal starting lineup's total PPG improves if
+    I add this player to my actual current roster. Folds in position-of-need
+    for free - a redundant player displaces nobody and nets ~0.
+  - impact_fallback: the same number for whoever I'd realistically get at
+    this position at my next turn instead. Tier cliffs fall out of this
+    automatically: if the fallback sits across a tier boundary, the
+    difference is large without needing a separate tier_cliff multiplier.
+  - P(gone): Poisson tail on the expected number of picks at this position
+    between now and my next turn, compared against this player's own rank
+    at the position. A top-of-position player is at risk after very few
+    picks; a deep one needs many.
+
+Why this replaced the previous version (both were real bugs, keep them fixed):
+
+  1. urgency was `net_impact * (1 - survival) * tier_cliff`, and tier_cliff
+     was scaled by `fraction_depleted`, which is 0 for every intact tier.
+     At the start of a draft that made EVERY urgency score exactly 0.00.
+     Multiplying three quantities in three different units also produced a
+     number with no interpretable meaning.
+  2. results were sorted by (tier ASC, urgency DESC) GLOBALLY - not within
+     position, despite the comment saying so. Every tier-1 player at every
+     position floated to the top and urgency only broke ties inside a tier
+     band, so the output was effectively just a tier list. Sorting is now
+     purely by urgency_score; tier is returned for display only.
 
 Read-only, no writes: reads live picks from DynamoDB, static reference data
-(draft_score/tier_cliff, ADP, config) from S3, and returns a ranked list.
-Nothing here mutates draft state - that's DraftState.py's job.
+(draft_score/tier, ADP, config) from S3, returns a ranked list.
 
-Separate Lambda, not folded into DraftBoard.py - different trigger pattern
-(needs to run fresh after every pick, not just on page load) and different
-responsibility (a live recommendation engine, not a static board read).
+Access pattern: needs "all picks so far" AND "picks for a specific team."
+The draft-state table is tiny (a couple hundred items), so this does ONE
+Scan per invocation and groups by team in Python rather than adding a GSI.
 
-Synchronous request-response, not DynamoDB Streams - Streams is the more
-"correct" long-term architecture (react to picks as they're written) but
-adds real asynchronous complexity (event source mapping, batch/retry
-handling) that isn't worth taking on for this timeline. A plain "frontend
-asks, Lambda computes and returns" call is simpler to build, debug, and
-reason about.
+Static reference data doesn't change during a draft - cached in a
+module-level global, re-fetched only on cold start. Only the DynamoDB scan
+is fresh every call.
 
-Access pattern (see docs/realtime-urgency-scoring-spec.md section 7): this
-needs "all picks so far" AND "all picks so far for a specific team" (used
-per team in the survival-probability walk). The draft-state DynamoDB table
-is tiny (a couple hundred items at most, ~8KB observed mid-draft) - nowhere
-close to the 1MB Scan limit - so this deliberately does ONE Scan per
-invocation and groups by team in Python, rather than adding a GSI on `team`
-and issuing a separate Query per team. A GSI would only earn its keep at a
-scale this table will never reach.
-
-Static reference data (gold draft_score/tier_cliff, ADP, roster_positions/
-teams/draft_order/my_team config) doesn't change during a draft - cached in
-a module-level global and reused across warm invocations, re-fetched only
-on a cold start. Only the DynamoDB picks scan is fetched fresh every call.
-
-Expected API Gateway (Lambda proxy) route, with the Cognito JWT authorizer
-attached:
     GET /draft-urgency
-        -> 200 [{"entity_id": "...", "pos": "...", "draft_score": ...,
-                 "tier": ..., "tier_cliff": ..., "survival_probability": ...,
-                 "need_multiplier": ..., "urgency_score": ...}, ...]
-        Sorted by urgency_score descending. Only undrafted players -
-        there's nothing to recommend about a player who's already gone.
+        -> 200 [{"entity_id", "pos", "proj_fpts_pg", "draft_score", "tier",
+                 "impact_now", "fallback_entity_id", "impact_fallback",
+                 "gone_probability", "expected_position_picks",
+                 "urgency_score"}, ...]
+        Sorted by urgency_score descending. Undrafted players only.
 
 Deploy notes:
-    - Runtime: Python 3.12 (matches Silver/Gold/DraftBoard - duckdb has no
-      cp314 wheels yet). Needs the duckdb layer, same one those use.
-    - Execution role: needs dynamodb:Scan on the draft-state table, plus
-      s3:GetObject scoped to "gold/facts/*" and "config/*" - read-only,
-      nothing else.
-    - Set the BUCKET_NAME and DRAFT_STATE_TABLE_NAME environment variables.
-    - Environment variables LC_ALL=C.UTF-8, LANG=C.UTF-8, PYTHONUTF8=1 -
-      same DuckDB locale gotcha as Silver/Gold/DraftBoard.
-    - Timeout: 15-20s is plenty - one DynamoDB scan, a handful of small S3
-      reads (cached after the first cold start), and the survival-
-      probability walk is at most 24 iterations per position, 6 positions.
+    - Runtime: Python 3.12. Needs the duckdb layer.
+    - Role: dynamodb:Scan on the draft-state table, s3:GetObject on
+      "gold/facts/*" and "config/*".
+    - Env: BUCKET_NAME, DRAFT_STATE_TABLE_NAME, LC_ALL=C.UTF-8,
+      LANG=C.UTF-8, PYTHONUTF8=1.
+    - Timeout: 15-20s is plenty.
 """
 
 import decimal
 import json
 import logging
+import math
 import os
 
 import boto3
@@ -74,37 +78,25 @@ DRAFT_STATE_TABLE_NAME = os.environ["DRAFT_STATE_TABLE_NAME"]
 
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"]
 
-# Not a real forecast cap - just a generous loop bound for
-# _picks_until_next_turn's search, matching the frontend's identical search
-# bound. The real number of picks actually walked each call is however many
-# picks genuinely separate one of the user's turns from the next, which for
-# a real league is naturally never more than ~2x the team count (see
-# docs/realtime-urgency-scoring-spec.md section 3d's 24-pick worst case for
-# a 12-team snake draft) - nothing here hardcodes that 24, it just falls
-# out of the real draft_order.
+# Generous loop bound for _picks_until_next_turn's search, matching the
+# frontend's identical bound. The real gap walked each call is however many
+# picks separate one of my turns from the next.
 _TURN_SEARCH_BOUND = 1000
 
-# Tunable constants for need_adjustment/need_multiplier - deliberately
-# simple/lean, not config-driven yet (see docs/realtime-urgency-scoring-
-# spec.md section 8: full behavioral modeling is explicitly out of scope
-# for this build cycle). Revisit as real config values if these ever need
-# regular tuning the way tier_cliff's band_width did.
+# Multipliers on a team's per-pick rate for a position, by how much room
+# they have for it. Deliberately lean - not config-driven yet.
 NEED_STARTER = 1.5
 NEED_BENCH_ONLY = 1.0
 NEED_NO_ROOM = 0.3
 
-# Sort-only sentinel (see handler()'s results.sort) - untiered players
-# (outside the top-2x-replacement window Gold tiers at all) need to sort
-# as worse than every real tier, which for a handful of positions with as
-# many as 9 tiers means anything comfortably above that works.
-MAX_TIER_BOUND = 20
-
-# ADP-window size for base_rate - how many of the next best-ADP undrafted
-# players to look at when estimating "what fraction of picks around here
-# tend to be this position." 12 = roughly one round - wide enough for a
-# stable estimate, narrow enough to reflect the current draft stage rather
-# than the whole board's overall position mix.
+# How many of the next best-ADP undrafted players to look at when
+# estimating "what fraction of picks around here tend to be this position."
+# 12 = roughly one round.
 BASE_RATE_WINDOW = 12
+
+# Guard on the Poisson CDF loop - a player ranked deeper than this at his
+# position is not realistically at risk in a single pick gap.
+_MAX_RANK_FOR_RISK = 200
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
@@ -112,9 +104,6 @@ log.setLevel(logging.INFO)
 s3 = boto3.client("s3")
 draft_state_table = boto3.resource("dynamodb").Table(DRAFT_STATE_TABLE_NAME)
 
-# Module-level cache for static reference data - populated on first use in
-# a given execution environment, reused across warm invocations. See the
-# module docstring's "Deploy notes" section.
 _static_cache: dict | None = None
 
 
@@ -135,9 +124,8 @@ def _read_config(name: str, default: dict) -> dict:
 
 
 def _load_static_data() -> dict:
-    """Everything that doesn't change during a draft: gold draft_score/
-    tier_cliff joined to ADP, roster_positions, draft_order, my_team,
-    league team count. Loaded once per execution environment."""
+    """Everything that doesn't change during a draft. Loaded once per
+    execution environment."""
     global _static_cache
     if _static_cache is not None:
         return _static_cache
@@ -155,55 +143,46 @@ def _load_static_data() -> dict:
         , fds.proj_fpts_pg
         , fds.draft_score
         , fds.tier
-        , fds.tier_size
-        , fds.tier_gap
         , adp.ADP as adp_rank
         from read_parquet('{bucket_uri}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
         left outer join read_parquet('{bucket_uri}/gold/facts/fact_adp.parquet', union_by_name = true) adp
           on fds.entity_id = adp.entity_id
     """).fetchall()
 
-    columns = ["entity_id", "pos", "proj_fpts_pg", "draft_score", "tier", "tier_size", "tier_gap", "adp_rank"]
+    columns = ["entity_id", "pos", "proj_fpts_pg", "draft_score", "tier", "adp_rank"]
     players = []
     for row in rows:
         rec = dict(zip(columns, row))
-        for key in ("proj_fpts_pg", "draft_score", "tier_gap"):
+        for key in ("proj_fpts_pg", "draft_score"):
             if isinstance(rec[key], decimal.Decimal):
                 rec[key] = float(rec[key])
+        if rec[key] is None:
+            rec[key] = 0.0
         if isinstance(rec["adp_rank"], decimal.Decimal):
             rec["adp_rank"] = int(rec["adp_rank"])
+        rec["proj_fpts_pg"] = float(rec["proj_fpts_pg"] or 0)
+        rec["draft_score"] = float(rec["draft_score"] or 0)
         players.append(rec)
-
-    roster_positions = _read_config("roster_positions", {"slots": []}).get("slots", [])
-    draft_order = _read_config("draft_order", {"draft_type": "snake", "team_order": []})
-    my_team = _read_config("my_team", {"team_name": None}).get("team_name")
 
     _static_cache = {
         "players": players,
-        "roster_positions": roster_positions,
-        "draft_order": draft_order,
-        "my_team": my_team,
+        "roster_positions": _read_config("roster_positions", {"slots": []}).get("slots", []),
+        "draft_order": _read_config("draft_order", {"draft_type": "snake", "team_order": []}),
+        "my_team": _read_config("my_team", {"team_name": None}).get("team_name"),
     }
     return _static_cache
 
 
 def _get_all_picks() -> list[dict]:
-    """One full Scan, not a per-team Query - see module docstring's
-    "Access pattern" section for why that's the right call at this table's
-    scale. Every caller that needs "picks for team X" filters this same
-    result in memory instead of hitting DynamoDB again."""
     items = draft_state_table.scan().get("Items", [])
     for item in items:
         item["pick_number"] = int(item["pick_number"])
     return items
 
 
-# pick_number is 1-indexed and guaranteed gapless by DraftState.py (server-
-# computed, undo-last-only). Same snake/round-robin math as the frontend's
-# computeOnTheClock in webapp/src/pages/DraftBoardPage.jsx - kept in
-# lockstep deliberately, this is the one source of truth for "whose turn is
-# it" duplicated across the JS and Python sides of this app.
 def _compute_on_the_clock(team_order: list[str], draft_type: str, pick_number: int) -> str | None:
+    """Snake/round-robin math. Kept in lockstep with the frontend's
+    computeOnTheClock in webapp/src/pages/DraftBoardPage.jsx."""
     n = len(team_order)
     if n == 0:
         return None
@@ -215,11 +194,9 @@ def _compute_on_the_clock(team_order: list[str], draft_type: str, pick_number: i
 
 
 def _picks_until_next_turn(team_order: list[str], draft_type: str, pick_number: int, team: str | None) -> int | None:
-    """How many total picks (across all teams) happen before `team` is next
-    on the clock, counting from the pick right after `pick_number` - skips
-    the current pick even if it's already this team's turn, matching the
-    frontend's picksUntilNextTurn (answers "what do I risk by NOT drafting
-    right now," not "how far away is the turn I'm already having")."""
+    """Total picks before `team` is next on the clock, counting from the
+    pick right after `pick_number` - answers "what do I risk by NOT
+    drafting right now."""
     if not team or len(team_order) == 0:
         return None
     for n in range(pick_number + 1, pick_number + _TURN_SEARCH_BOUND):
@@ -228,14 +205,11 @@ def _picks_until_next_turn(team_order: list[str], draft_type: str, pick_number: 
     return None
 
 
-# Python port of webapp/src/lib/rosterSlots.js's computeSlotFill - same
-# greedy most-specific-slot-first algorithm (dedicated slots fill before
-# FLEX/SUPERFLEX), kept in lockstep with the JS version deliberately. See
-# that file for the full reasoning; not repeated here.
-def _compute_slot_fill(picks: list[dict], team: str, roster_positions: list[dict]) -> list[dict]:
-    team_picks = [p for p in picks if p["team"] == team]
-    assigned_indexes: set[int] = set()
-
+def _compute_slot_fill(team_picks: list[dict], roster_positions: list[dict]) -> list[dict]:
+    """Python port of webapp/src/lib/rosterSlots.js's computeSlotFill -
+    greedy most-specific-slot-first (dedicated slots fill before
+    FLEX/SUPERFLEX)."""
+    assigned: set[int] = set()
     ordered_slots = sorted(roster_positions, key=lambda s: len(s["eligible_positions"]))
 
     filled_by_slot: dict[str, int] = {}
@@ -244,12 +218,12 @@ def _compute_slot_fill(picks: list[dict], team: str, roster_positions: list[dict
         for _ in range(slot["count"]):
             idx = next(
                 (j for j, p in enumerate(team_picks)
-                 if j not in assigned_indexes and p["pos"] in slot["eligible_positions"]),
+                 if j not in assigned and p["pos"] in slot["eligible_positions"]),
                 None,
             )
             if idx is None:
                 break
-            assigned_indexes.add(idx)
+            assigned.add(idx)
             filled += 1
         filled_by_slot[slot["slot_name"]] = filled
 
@@ -265,44 +239,39 @@ def _compute_slot_fill(picks: list[dict], team: str, roster_positions: list[dict
     ]
 
 
-def _open_starting_slots_for_position(slot_fill: list[dict], position: str) -> list[dict]:
-    """Non-BENCH slots, still open, eligible for this position. Naturally
-    covers superflex (or any other multi-position slot) with no position-
-    specific special-casing - a slot whose eligible_positions includes QB
-    counts here whether it's QB's own dedicated slot or SUPERFLEX, exactly
-    the "either slot open counts as open" rule
-    docs/realtime-urgency-scoring-spec.md requires for QB specifically."""
-    return [s for s in slot_fill if s["slot_name"] != "BENCH" and s["open"] > 0 and position in s["eligible_positions"]]
+def _open_starter_capacity(slot_fill: list[dict], position: str) -> int:
+    """Open non-BENCH slots eligible for this position. Covers SUPERFLEX
+    with no position-specific special-casing - any slot whose
+    eligible_positions includes QB counts, dedicated or not."""
+    return sum(
+        s["open"] for s in slot_fill
+        if s["slot_name"] != "BENCH" and s["open"] > 0 and position in s["eligible_positions"]
+    )
 
 
-def _open_bench_slots_for_position(slot_fill: list[dict], position: str) -> list[dict]:
-    return [s for s in slot_fill if s["slot_name"] == "BENCH" and s["open"] > 0 and position in s["eligible_positions"]]
+def _has_bench_room(slot_fill: list[dict], position: str) -> bool:
+    return any(
+        s["slot_name"] == "BENCH" and s["open"] > 0 and position in s["eligible_positions"]
+        for s in slot_fill
+    )
 
 
-def _base_rate(position: str, pick_number: int, undrafted_players: list[dict]) -> float:
-    """League-wide baseline: of the next BASE_RATE_WINDOW best-ADP
-    undrafted players from this pick onward, what fraction play this
-    position. A data-driven "what tends to go around here" signal derived
-    straight from ADP, per docs/realtime-urgency-scoring-spec.md section
-    3a - no separate behavioral model needed for the baseline itself."""
-    with_adp = sorted((p for p in undrafted_players if p["adp_rank"] is not None), key=lambda p: p["adp_rank"])
+def _base_rate(position: str, pick_number: int, undrafted: list[dict]) -> float:
+    """Of the next BASE_RATE_WINDOW best-ADP undrafted players from this
+    pick onward, what fraction play this position."""
+    with_adp = sorted((p for p in undrafted if p["adp_rank"] is not None), key=lambda p: p["adp_rank"])
     window = [p for p in with_adp if p["adp_rank"] >= pick_number][:BASE_RATE_WINDOW]
     if not window:
-        # Nothing with ADP left ahead of this pick (very late in the draft,
-        # past ADP's real coverage) - fall back to the tail of the ADP-
-        # ranked pool rather than an empty window.
         window = with_adp[-BASE_RATE_WINDOW:] if with_adp else []
     if not window:
         return 1.0 / len(POSITIONS)
     return sum(1 for p in window if p["pos"] == position) / len(window)
 
 
-def _tendency_adjustment(team: str, position: str, team_picks: list[dict], adp_by_entity: dict[str, int]) -> float:
-    """Section 3c, deliberately lean: linear scaling off this team's own
-    average (pick_number - player_adp) at this position so far. Reaching
-    early (negative average) scales the rate up; letting value fall
-    (positive average) scales it down. No prior picks at this position for
-    this team -> neutral (1.0), no data to lean on yet."""
+def _tendency_adjustment(position: str, team_picks: list[dict], adp_by_entity: dict[str, int]) -> float:
+    """Linear scaling off this team's own average (pick_number - ADP) at
+    this position so far. Reaching early scales up, letting value fall
+    scales down. No prior picks there -> neutral."""
     deltas = [
         p["pick_number"] - adp_by_entity[p["entity_id"]]
         for p in team_picks
@@ -314,167 +283,95 @@ def _tendency_adjustment(team: str, position: str, team_picks: list[dict], adp_b
     return max(0.5, min(1.5, 1.0 - avg_delta * 0.02))
 
 
-def _compute_position_pick_forecast(
+def _expected_position_picks(
     position: str,
     pick_number: int,
     picks: list[dict],
-    undrafted_players: list[dict],
+    undrafted: list[dict],
     draft_order: dict,
     my_team: str,
     roster_positions: list[dict],
     adp_by_entity: dict[str, int],
-) -> tuple[float, float]:
-    """Section 3, generalized: walks the picks between now and the user's
-    next turn and returns (survive_prob, expected_picks) for `position` -
-    survive_prob is P(nobody takes this position at all) on its own;
-    expected_picks is the sum of per-pick rates, i.e. the expected NUMBER
-    of this-position picks before the user's turn. _player_survival_
-    probability below turns expected_picks into a genuinely per-PLAYER
-    number by comparing it against a specific player's own rank at the
-    position - this function only computes the position-level forecast
-    once (shared across every player at that position), not once per
-    player.
+) -> float:
+    """Expected NUMBER of picks at `position` between now and my next turn.
 
     Walked SEQUENTIALLY with running per-team state, not evaluated
-    independently per team - required per section 3d, since a team picking
-    twice in the same window (the snake round-turn) can have its need
-    change between its own two picks. `probable_extra_filled` is a soft,
-    expected-value running total (this team's cumulative probability of
-    having already taken this position during THIS walk), not a hard
-    Monte Carlo sample - simple and cheap, per the spec's explicit "does
-    not need to be sophisticated" guidance, while still satisfying the
-    correctness requirement that state carries forward within the walk.
+    independently per team: a team picking twice in the same window (the
+    snake round-turn) can have its need change between its own two picks.
+    `probable_filled` is a soft expected-value running total, not a Monte
+    Carlo sample - cheap, and enough to carry state forward correctly.
+
+    The walk covers pick_number through pick_number + n_until - 1.
+    pick_number + n_until is my own turn. Starting at pick_number + 1 was a
+    real bug: it silently skipped the very next pick, which is total when
+    n_until == 1 (zero picks evaluated, everything defaults to safe).
     """
     team_order = draft_order.get("team_order", [])
     draft_type = draft_order.get("draft_type", "snake")
 
     n_until = _picks_until_next_turn(team_order, draft_type, pick_number, my_team)
     if not n_until:
-        # No real gap to forecast (already my turn, or draft_order/my_team
-        # not configured) - nothing stands between now and "my turn," so
-        # survival is certain and nobody's expected to be picked.
-        return 1.0, 0.0
+        return 0.0
 
     team_picks: dict[str, list[dict]] = {t: [p for p in picks if p["team"] == t] for t in team_order}
-    probable_extra_filled: dict[str, float] = {t: 0.0 for t in team_order}
+    probable_filled: dict[str, float] = {t: 0.0 for t in team_order}
 
-    # n_until picks separate now from my next turn - that's pick_number
-    # itself (whoever's on the clock RIGHT NOW) through pick_number +
-    # n_until - 1, since pick_number + n_until is my own turn (that's
-    # literally how _picks_until_next_turn found n_until). Starting the
-    # walk at pick_number + 1 instead of pick_number was a real bug: it
-    # silently skipped the very next pick every time, which is invisible
-    # when n_until is large (one missed pick out of many) but total when
-    # n_until == 1 - the walk's only "iteration" would land on my own turn,
-    # get correctly skipped as not-a-threat, and leave zero picks
-    # evaluated at all, defaulting every survival_probability to 1.0 and
-    # every urgency_score to 0.00 - exactly the reported bug ("every time
-    # the team before is on the board, urgency is 0.00").
-    survive_prob = 1.0
-    expected_picks = 0.0
+    expected = 0.0
     for offset in range(0, n_until):
         pick_n = pick_number + offset
         team = _compute_on_the_clock(team_order, draft_type, pick_n)
         if team is None or team == my_team:
             continue
 
-        slot_fill = _compute_slot_fill(team_picks[team], team, roster_positions)
-        starter_capacity = sum(s["open"] for s in _open_starting_slots_for_position(slot_fill, position))
-        remaining_capacity = starter_capacity - probable_extra_filled[team]
-        has_bench_room = bool(_open_bench_slots_for_position(slot_fill, position))
+        slot_fill = _compute_slot_fill(team_picks[team], roster_positions)
+        remaining_capacity = _open_starter_capacity(slot_fill, position) - probable_filled[team]
 
         if remaining_capacity > 0:
             need_adj = NEED_STARTER
-        elif has_bench_room:
+        elif _has_bench_room(slot_fill, position):
             need_adj = NEED_BENCH_ONLY
         else:
             need_adj = NEED_NO_ROOM
 
-        tendency_adj = _tendency_adjustment(team, position, team_picks[team], adp_by_entity)
-
-        rate = _base_rate(position, pick_n, undrafted_players) * need_adj * tendency_adj
+        rate = _base_rate(position, pick_n, undrafted) * need_adj * _tendency_adjustment(
+            position, team_picks[team], adp_by_entity
+        )
         rate = max(0.0, min(1.0, rate))
 
-        survive_prob *= (1 - rate)
-        expected_picks += rate
-        probable_extra_filled[team] += rate
+        expected += rate
+        probable_filled[team] += rate
 
-    return survive_prob, expected_picks
-
-
-def _player_survival_probability(candidate: dict, position_pool: list[dict], expected_picks: float) -> float:
-    """P(this specific player - or, equivalently, nobody at least this
-    good - survives to the user's next turn). Reframes the position-level
-    expected_picks against THIS player's own rank among currently
-    undrafted players at their position: if expected_picks is much smaller
-    than how many players rank ahead of (or at) this one, survival is
-    likely; if expected_picks meets or exceeds that rank, it isn't. This
-    is what makes survival tier-sensitive without a separate tier-specific
-    walk - a player near the top of the position needs very few picks to
-    be at risk, a player deep down the board needs many, using the exact
-    same position-level forecast either way."""
-    same_position = sorted(
-        (p for p in position_pool if p["pos"] == candidate["pos"]),
-        key=lambda p: -(p["draft_score"] or 0),
-    )
-    rank = next(
-        (i + 1 for i, p in enumerate(same_position) if p["entity_id"] == candidate["entity_id"]),
-        len(same_position) or 1,
-    )
-    return max(0.0, min(1.0, 1 - expected_picks / rank))
+    return expected
 
 
-def _live_tier_cliff(candidate: dict, undrafted_players: list[dict]) -> float:
-    """tier_gap (this tier's average draft_score minus the next tier's -
-    genuinely static, computed once in Gold) scaled by TWO live, blended
-    signals, recomputed fresh every call:
+def _gone_probability(rank: int, expected_picks: float) -> float:
+    """P(at least `rank` players at this position are taken before my next
+    turn) - i.e. the chance this specific player is gone.
 
-    1. fraction_depleted - how much of this player's ORIGINAL tier
-       (Gold's static tier_size) has already been drafted away. Starts at
-       0 for an untouched tier and climbs toward 1.0 as the tier empties
-       out - this is what makes exposure rise as tier-mates get taken,
-       which rank-within-remaining-tier alone doesn't reliably do (it can
-       actually DIP for a player who becomes the top of a still-mostly-
-       intact tier, since they picked up buffer even though the tier
-       shrank - see chat).
-    2. rank_within_remaining_tier - where this player sits among
-       CURRENTLY UNDRAFTED tier-mates specifically, preserving the
-       original "does this player personally have a buffer below them"
-       distinction (points 4+5 of the redesign).
-
-    Neither alone was right: fraction_depleted alone would give every
-    remaining player in a tier the identical value, losing the "where do
-    I fit" signal; rank-within-remaining-tier alone could dip as a tier
-    thins out from the top. Multiplying them keeps both properties.
+    Poisson(expected_picks) tail rather than the old ad hoc
+    `1 - expected/rank`, which went negative for top-ranked players and
+    was not a probability at all. P(gone) = 1 - P(X < rank).
     """
-    tier_gap = candidate["tier_gap"]
-    original_tier_size = candidate["tier_size"]
-    if candidate["tier"] is None or tier_gap is None or not original_tier_size:
+    if rank <= 0:
+        return 1.0
+    if expected_picks <= 0:
+        return 0.0
+    if rank > _MAX_RANK_FOR_RISK:
         return 0.0
 
-    same_tier_undrafted = sorted(
-        (p for p in undrafted_players if p["pos"] == candidate["pos"] and p["tier"] == candidate["tier"]),
-        key=lambda p: -(p["draft_score"] or 0),
-    )
-    remaining_tier_size = len(same_tier_undrafted)
-    if remaining_tier_size == 0:
-        return tier_gap  # candidate is somehow the last one - full exposure
-
-    rank = next(
-        (i + 1 for i, p in enumerate(same_tier_undrafted) if p["entity_id"] == candidate["entity_id"]),
-        remaining_tier_size,
-    )
-    fraction_depleted = max(0.0, (original_tier_size - remaining_tier_size) / original_tier_size)
-    rank_fraction = rank / remaining_tier_size
-    return tier_gap * fraction_depleted * rank_fraction
+    # P(X < rank) = sum_{i=0}^{rank-1} e^-lam * lam^i / i!
+    term = math.exp(-expected_picks)
+    cdf = term
+    for i in range(1, rank):
+        term *= expected_picks / i
+        cdf += term
+    return max(0.0, min(1.0, 1.0 - cdf))
 
 
 def _optimal_lineup_ppg(players: list[dict], roster_positions: list[dict]) -> float:
-    """Greedy value-maximizing lineup assignment: highest proj_fpts_pg
-    gets first claim on the most specific still-open eligible slot (same
-    iteration order as _compute_slot_fill, but by value instead of draft
-    order), summing PPG across non-BENCH assignments only - bench players
-    don't score for you, so they don't count toward team PPG."""
+    """Greedy value-maximizing lineup assignment: highest proj_fpts_pg gets
+    first claim on the most specific still-open eligible slot. Sums PPG
+    across non-BENCH assignments only - bench players don't score."""
     ordered_slots = sorted(roster_positions, key=lambda s: len(s["eligible_positions"]))
     players_sorted = sorted(players, key=lambda p: -(p["proj_fpts_pg"] or 0))
     assigned = [False] * len(players_sorted)
@@ -494,17 +391,6 @@ def _optimal_lineup_ppg(players: list[dict], roster_positions: list[dict]) -> fl
     return total
 
 
-def _net_ppg_impact(candidate: dict, my_players: list[dict], roster_positions: list[dict]) -> float:
-    """Sections 1+2 combined: how much does MY optimal starting lineup's
-    total PPG change if I add this player, given my ACTUAL current roster
-    - not a generic "is this a need" flag. A redundant position naturally
-    comes out near zero here (the candidate just displaces nobody and ends
-    up on the bench) without needing a separate need_multiplier at all."""
-    without = _optimal_lineup_ppg(my_players, roster_positions)
-    with_candidate = _optimal_lineup_ppg(my_players + [candidate], roster_positions)
-    return with_candidate - without
-
-
 def handler(event, context):
     try:
         static_data = _load_static_data()
@@ -520,23 +406,25 @@ def handler(event, context):
         undrafted = [p for p in all_players if (p["entity_id"], p["pos"]) not in picked_keys]
         pick_number = len(picks) + 1
 
-        # The position-level pick forecast (survive_prob is kept only for
-        # API transparency/troubleshooting; expected_picks is what actually
-        # feeds _player_survival_probability below) is shared across every
-        # undrafted player at that position - computed once per position
-        # (6 total), not once per player (hundreds).
-        forecast_by_position = {
-            pos: _compute_position_pick_forecast(
+        # Position-level forecast: computed once per position (6 total),
+        # shared across every player at that position.
+        expected_by_position = {
+            pos: _expected_position_picks(
                 pos, pick_number, picks, undrafted, draft_order, my_team, roster_positions, adp_by_entity,
             )
             for pos in POSITIONS
         }
 
-        # My own current roster, with each pick's proj_fpts_pg looked up -
-        # needed as the baseline _net_ppg_impact compares "with candidate"
-        # against. Picks only carry entity_id/pos/team from DynamoDB, not
-        # proj_fpts_pg, so this joins them against the same static player
-        # data everything else here uses.
+        # Undrafted players at each position, best draft_score first. Index
+        # in this list IS the player's rank at his position, and is also
+        # what identifies the realistic fallback.
+        pool_by_position: dict[str, list[dict]] = {
+            pos: sorted((p for p in undrafted if p["pos"] == pos), key=lambda p: -p["draft_score"])
+            for pos in POSITIONS
+        }
+
+        # My actual current roster, joined to proj_fpts_pg - the baseline
+        # every impact number is measured against.
         players_by_key = {(p["entity_id"], p["pos"]): p for p in all_players}
         my_players = []
         if my_team:
@@ -544,56 +432,74 @@ def handler(event, context):
                 if pick["team"] != my_team:
                     continue
                 player = players_by_key.get((pick["entity_id"], pick["pos"]))
-                my_players.append({"pos": pick["pos"], "proj_fpts_pg": player["proj_fpts_pg"] if player else 0})
+                my_players.append({
+                    "pos": pick["pos"],
+                    "proj_fpts_pg": player["proj_fpts_pg"] if player else 0.0,
+                })
+
+        baseline_ppg = _optimal_lineup_ppg(my_players, roster_positions) if my_team else 0.0
+
+        # impact_now is looked up per player; fallback impacts repeat
+        # heavily across candidates at the same position, so memoize.
+        impact_cache: dict[str, float] = {}
+
+        def impact_of(player: dict) -> float:
+            key = player["entity_id"]
+            if key not in impact_cache:
+                impact_cache[key] = _optimal_lineup_ppg(my_players + [player], roster_positions) - baseline_ppg
+            return impact_cache[key]
 
         results = []
-        for p in undrafted:
-            survival_prob, expected_picks = forecast_by_position.get(p["pos"], (1.0, 0.0))
-            player_survival = _player_survival_probability(p, undrafted, expected_picks)
-            net_impact = _net_ppg_impact(p, my_players, roster_positions) if my_team else 0.0
-            tier_cliff = _live_tier_cliff(p, undrafted)
+        for pos, pool in pool_by_position.items():
+            expected_picks = expected_by_position.get(pos, 0.0)
+            # Whoever I'd realistically still find at this position at my
+            # next turn, if the expected number of picks here happens.
+            fallback_idx = int(round(expected_picks))
 
-            # Three distinct, complementary factors: net_impact is how much
-            # drafting them helps MY team right now (folds in "is this a
-            # need" - a redundant position naturally nets ~0 here); (1 -
-            # player_survival) is how likely I am to lose access to a
-            # player this good if I wait; tier_cliff is how much worse my
-            # fallback would be if that actually happens. See chat
-            # (docs/realtime-urgency-scoring-spec.md's replacement).
-            urgency_score = net_impact * (1 - player_survival) * tier_cliff
+            for idx, p in enumerate(pool):
+                rank = idx + 1
+                gone_prob = _gone_probability(rank, expected_picks)
 
-            results.append({
-                "entity_id": p["entity_id"],
-                "pos": p["pos"],
-                "draft_score": p["draft_score"],
-                "tier": p["tier"],
-                "tier_cliff": tier_cliff,
-                "position_survival_probability": round(survival_prob, 4),
-                "survival_probability": round(player_survival, 4),
-                "net_ppg_impact": round(net_impact, 2),
-                "urgency_score": round(urgency_score, 4),
-            })
+                impact_now = impact_of(p) if my_team else p["proj_fpts_pg"]
 
-        # A tier 4 player must never outrank a tier 3 player at the same
-        # position, full stop - not just "usually," since net_impact/
-        # survival/tier_cliff could otherwise combine in surprising ways.
-        # This is a COMPOUND SORT (tier ascending first, urgency_score
-        # descending second), not baked into urgency_score's own value -
-        # an earlier version encoded tier as a giant numeric offset
-        # (tier * 10000 + urgency) to guarantee the ordering survived the
-        # frontend's click-to-sort, but that made the displayed number
-        # unreadable (everything looked like a flat "190000" or "180000"
-        # with the actual signal buried past the decimal point). The
-        # guarantee belongs in how results get ORDERED, not in mangling
-        # the number itself - urgency_score stays a plain, human-readable
-        # value; the frontend needs the same compound comparator when the
-        # user clicks that column to sort, not just this default order.
-        # Untiered players (outside the top-2x-replacement window Gold
-        # tiers at all) sort as worse than every real tier.
-        results.sort(key=lambda r: (
-            r["tier"] if r["tier"] is not None else MAX_TIER_BOUND,
-            -r["urgency_score"],
-        ))
+                # Never "fall back" to someone ahead of this player - the
+                # realistic replacement is the better of (expected
+                # survivor, next man down from this candidate).
+                fb_idx = max(idx + 1, fallback_idx)
+                if fb_idx < len(pool):
+                    fallback = pool[fb_idx]
+                    impact_fallback = impact_of(fallback) if my_team else fallback["proj_fpts_pg"]
+                    fallback_entity_id = fallback["entity_id"]
+                else:
+                    # Position exhausted past this point - nothing to fall
+                    # back to, so the full impact is at risk.
+                    impact_fallback = 0.0
+                    fallback_entity_id = None
+
+                regret = max(0.0, impact_now - impact_fallback)
+                urgency_score = gone_prob * regret
+
+                results.append({
+                    "entity_id": p["entity_id"],
+                    "pos": p["pos"],
+                    "proj_fpts_pg": round(p["proj_fpts_pg"], 2),
+                    "draft_score": round(p["draft_score"], 2),
+                    "tier": p["tier"],
+                    "position_rank": rank,
+                    "impact_now": round(impact_now, 2),
+                    "fallback_entity_id": fallback_entity_id,
+                    "impact_fallback": round(impact_fallback, 2),
+                    "regret_if_missed": round(regret, 2),
+                    "gone_probability": round(gone_prob, 4),
+                    "expected_position_picks": round(expected_picks, 2),
+                    "urgency_score": round(urgency_score, 2),
+                })
+
+        # Sorted purely by urgency. Tier is returned for display, NOT used
+        # as a sort key - the previous global (tier ASC, urgency DESC) sort
+        # floated every tier-1 player at every position (K and DST
+        # included) to the top and reduced the output to a tier list.
+        results.sort(key=lambda r: -r["urgency_score"])
         return _response(200, results)
     except Exception as e:
         log.exception("Failed to compute draft urgency")
