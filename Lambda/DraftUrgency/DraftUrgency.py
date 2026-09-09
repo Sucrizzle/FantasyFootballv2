@@ -93,6 +93,15 @@ NEED_STARTER = 1.5
 NEED_BENCH_ONLY = 1.0
 NEED_NO_ROOM = 0.3
 
+# See handler()'s urgency_score assembly - encodes "tier is the dominant
+# sort key, raw urgency is the tie-breaker" as a hard property of the
+# number itself. TIER_DOMINANCE_SCALE must stay comfortably above any
+# realistic raw_urgency value (observed well under 100 in testing).
+# MAX_TIER_BOUND is a safe ceiling above any real number of tiers a
+# position could have, so lower (better) tier numbers always win.
+TIER_DOMINANCE_SCALE = 10000
+MAX_TIER_BOUND = 20
+
 # ADP-window size for base_rate - how many of the next best-ADP undrafted
 # players to look at when estimating "what fraction of picks around here
 # tend to be this position." 12 = roughly one round - wide enough for a
@@ -149,18 +158,19 @@ def _load_static_data() -> dict:
         , fds.proj_fpts_pg
         , fds.draft_score
         , fds.tier
-        , fds.tier_cliff
+        , fds.tier_size
+        , fds.tier_gap
         , adp.ADP as adp_rank
         from read_parquet('{bucket_uri}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
         left outer join read_parquet('{bucket_uri}/gold/facts/fact_adp.parquet', union_by_name = true) adp
           on fds.entity_id = adp.entity_id
     """).fetchall()
 
-    columns = ["entity_id", "pos", "proj_fpts_pg", "draft_score", "tier", "tier_cliff", "adp_rank"]
+    columns = ["entity_id", "pos", "proj_fpts_pg", "draft_score", "tier", "tier_size", "tier_gap", "adp_rank"]
     players = []
     for row in rows:
         rec = dict(zip(columns, row))
-        for key in ("proj_fpts_pg", "draft_score", "tier_cliff"):
+        for key in ("proj_fpts_pg", "draft_score", "tier_gap"):
             if isinstance(rec[key], decimal.Decimal):
                 rec[key] = float(rec[key])
         if isinstance(rec["adp_rank"], decimal.Decimal):
@@ -417,6 +427,51 @@ def _player_survival_probability(candidate: dict, position_pool: list[dict], exp
     return max(0.0, min(1.0, 1 - expected_picks / rank))
 
 
+def _live_tier_cliff(candidate: dict, undrafted_players: list[dict]) -> float:
+    """tier_gap (this tier's average draft_score minus the next tier's -
+    genuinely static, computed once in Gold) scaled by TWO live, blended
+    signals, recomputed fresh every call:
+
+    1. fraction_depleted - how much of this player's ORIGINAL tier
+       (Gold's static tier_size) has already been drafted away. Starts at
+       0 for an untouched tier and climbs toward 1.0 as the tier empties
+       out - this is what makes exposure rise as tier-mates get taken,
+       which rank-within-remaining-tier alone doesn't reliably do (it can
+       actually DIP for a player who becomes the top of a still-mostly-
+       intact tier, since they picked up buffer even though the tier
+       shrank - see chat).
+    2. rank_within_remaining_tier - where this player sits among
+       CURRENTLY UNDRAFTED tier-mates specifically, preserving the
+       original "does this player personally have a buffer below them"
+       distinction (points 4+5 of the redesign).
+
+    Neither alone was right: fraction_depleted alone would give every
+    remaining player in a tier the identical value, losing the "where do
+    I fit" signal; rank-within-remaining-tier alone could dip as a tier
+    thins out from the top. Multiplying them keeps both properties.
+    """
+    tier_gap = candidate["tier_gap"]
+    original_tier_size = candidate["tier_size"]
+    if candidate["tier"] is None or tier_gap is None or not original_tier_size:
+        return 0.0
+
+    same_tier_undrafted = sorted(
+        (p for p in undrafted_players if p["pos"] == candidate["pos"] and p["tier"] == candidate["tier"]),
+        key=lambda p: -(p["draft_score"] or 0),
+    )
+    remaining_tier_size = len(same_tier_undrafted)
+    if remaining_tier_size == 0:
+        return tier_gap  # candidate is somehow the last one - full exposure
+
+    rank = next(
+        (i + 1 for i, p in enumerate(same_tier_undrafted) if p["entity_id"] == candidate["entity_id"]),
+        remaining_tier_size,
+    )
+    fraction_depleted = max(0.0, (original_tier_size - remaining_tier_size) / original_tier_size)
+    rank_fraction = rank / remaining_tier_size
+    return tier_gap * fraction_depleted * rank_fraction
+
+
 def _optimal_lineup_ppg(players: list[dict], roster_positions: list[dict]) -> float:
     """Greedy value-maximizing lineup assignment: highest proj_fpts_pg
     gets first claim on the most specific still-open eligible slot (same
@@ -499,7 +554,7 @@ def handler(event, context):
             survival_prob, expected_picks = forecast_by_position.get(p["pos"], (1.0, 0.0))
             player_survival = _player_survival_probability(p, undrafted, expected_picks)
             net_impact = _net_ppg_impact(p, my_players, roster_positions) if my_team else 0.0
-            tier_cliff = p["tier_cliff"] or 0.0
+            tier_cliff = _live_tier_cliff(p, undrafted)
 
             # Three distinct, complementary factors: net_impact is how much
             # drafting them helps MY team right now (folds in "is this a
@@ -508,7 +563,24 @@ def handler(event, context):
             # player this good if I wait; tier_cliff is how much worse my
             # fallback would be if that actually happens. See chat
             # (docs/realtime-urgency-scoring-spec.md's replacement).
-            urgency_score = net_impact * (1 - player_survival) * tier_cliff
+            raw_urgency = net_impact * (1 - player_survival) * tier_cliff
+
+            # A tier 4 player must never outrank a tier 3 player at the
+            # same position, full stop - not just "usually," since these
+            # three factors could otherwise combine in surprising ways.
+            # Encoding tier as the dominant term and raw_urgency as a
+            # tie-breaker (same technique as a lexicographic sort packed
+            # into one sortable number) makes that a hard mathematical
+            # property of urgency_score itself, which matters because the
+            # frontend table re-sorts on this raw number whenever someone
+            # clicks the column header - a display-only ordering wouldn't
+            # survive that. TIER_DOMINANCE_SCALE is comfortably above any
+            # realistic raw_urgency magnitude observed in testing (well
+            # under 100), so it can never cross a tier boundary. Untiered
+            # players (outside the top-2x-replacement window Gold tiers at
+            # all) are treated as worse than every real tier.
+            tier_for_ranking = p["tier"] if p["tier"] is not None else MAX_TIER_BOUND
+            urgency_score = (MAX_TIER_BOUND - tier_for_ranking) * TIER_DOMINANCE_SCALE + raw_urgency
 
             results.append({
                 "entity_id": p["entity_id"],
@@ -519,6 +591,7 @@ def handler(event, context):
                 "position_survival_probability": round(survival_prob, 4),
                 "survival_probability": round(player_survival, 4),
                 "net_ppg_impact": round(net_impact, 2),
+                "raw_urgency": round(raw_urgency, 4),
                 "urgency_score": round(urgency_score, 4),
             })
 

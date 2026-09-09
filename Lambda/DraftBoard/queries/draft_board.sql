@@ -17,6 +17,7 @@ select
 , bool_or(1=1) as is_active
 , bool_or(1=2) as is_rookie
 , adp.ADP as adp_rank
+, fds.tier
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_team.parquet', union_by_name = true) dt
   on fds.entity_id = dt.team
@@ -35,6 +36,7 @@ group by
 , dt.team_color
 , dt.team_color2
 , adp.ADP
+, fds.tier
  union all
 select
   fds.entity_id
@@ -50,6 +52,7 @@ select
 , dp.on_active_roster as is_active
 , bool_or(dp.rookie_year = ms.max_season) as is_rookie
 , adp.ADP as adp_rank
+, fds.tier
 from read_parquet('${bucket}/gold/facts/fact_draft_scores.parquet', union_by_name = true) fds
 left outer join read_parquet('${bucket}/gold/dimensions/dim_player.parquet', union_by_name = true) dp
   on fds.entity_id = dp.gsis_id
@@ -73,3 +76,4 @@ group by
 , dt.team_color2
 , dp.on_active_roster
 , adp.ADP
+, fds.tier

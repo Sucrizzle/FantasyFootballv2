@@ -363,6 +363,8 @@ function PlayerDetailPanel({ row, history }) {
         </p>
         <p className="draft-detail-legend">
           ADP: {typeof row.adp_rank === 'number' ? `#${row.adp_rank}` : 'Unranked'}
+          {' · '}
+          Tier: {typeof row.tier === 'number' ? row.tier : '—'}
         </p>
 
         <HistoryChart
