@@ -93,13 +93,10 @@ NEED_STARTER = 1.5
 NEED_BENCH_ONLY = 1.0
 NEED_NO_ROOM = 0.3
 
-# See handler()'s urgency_score assembly - encodes "tier is the dominant
-# sort key, raw urgency is the tie-breaker" as a hard property of the
-# number itself. TIER_DOMINANCE_SCALE must stay comfortably above any
-# realistic raw_urgency value (observed well under 100 in testing).
-# MAX_TIER_BOUND is a safe ceiling above any real number of tiers a
-# position could have, so lower (better) tier numbers always win.
-TIER_DOMINANCE_SCALE = 10000
+# Sort-only sentinel (see handler()'s results.sort) - untiered players
+# (outside the top-2x-replacement window Gold tiers at all) need to sort
+# as worse than every real tier, which for a handful of positions with as
+# many as 9 tiers means anything comfortably above that works.
 MAX_TIER_BOUND = 20
 
 # ADP-window size for base_rate - how many of the next best-ADP undrafted
@@ -563,24 +560,7 @@ def handler(event, context):
             # player this good if I wait; tier_cliff is how much worse my
             # fallback would be if that actually happens. See chat
             # (docs/realtime-urgency-scoring-spec.md's replacement).
-            raw_urgency = net_impact * (1 - player_survival) * tier_cliff
-
-            # A tier 4 player must never outrank a tier 3 player at the
-            # same position, full stop - not just "usually," since these
-            # three factors could otherwise combine in surprising ways.
-            # Encoding tier as the dominant term and raw_urgency as a
-            # tie-breaker (same technique as a lexicographic sort packed
-            # into one sortable number) makes that a hard mathematical
-            # property of urgency_score itself, which matters because the
-            # frontend table re-sorts on this raw number whenever someone
-            # clicks the column header - a display-only ordering wouldn't
-            # survive that. TIER_DOMINANCE_SCALE is comfortably above any
-            # realistic raw_urgency magnitude observed in testing (well
-            # under 100), so it can never cross a tier boundary. Untiered
-            # players (outside the top-2x-replacement window Gold tiers at
-            # all) are treated as worse than every real tier.
-            tier_for_ranking = p["tier"] if p["tier"] is not None else MAX_TIER_BOUND
-            urgency_score = (MAX_TIER_BOUND - tier_for_ranking) * TIER_DOMINANCE_SCALE + raw_urgency
+            urgency_score = net_impact * (1 - player_survival) * tier_cliff
 
             results.append({
                 "entity_id": p["entity_id"],
@@ -591,11 +571,29 @@ def handler(event, context):
                 "position_survival_probability": round(survival_prob, 4),
                 "survival_probability": round(player_survival, 4),
                 "net_ppg_impact": round(net_impact, 2),
-                "raw_urgency": round(raw_urgency, 4),
                 "urgency_score": round(urgency_score, 4),
             })
 
-        results.sort(key=lambda r: r["urgency_score"], reverse=True)
+        # A tier 4 player must never outrank a tier 3 player at the same
+        # position, full stop - not just "usually," since net_impact/
+        # survival/tier_cliff could otherwise combine in surprising ways.
+        # This is a COMPOUND SORT (tier ascending first, urgency_score
+        # descending second), not baked into urgency_score's own value -
+        # an earlier version encoded tier as a giant numeric offset
+        # (tier * 10000 + urgency) to guarantee the ordering survived the
+        # frontend's click-to-sort, but that made the displayed number
+        # unreadable (everything looked like a flat "190000" or "180000"
+        # with the actual signal buried past the decimal point). The
+        # guarantee belongs in how results get ORDERED, not in mangling
+        # the number itself - urgency_score stays a plain, human-readable
+        # value; the frontend needs the same compound comparator when the
+        # user clicks that column to sort, not just this default order.
+        # Untiered players (outside the top-2x-replacement window Gold
+        # tiers at all) sort as worse than every real tier.
+        results.sort(key=lambda r: (
+            r["tier"] if r["tier"] is not None else MAX_TIER_BOUND,
+            -r["urgency_score"],
+        ))
         return _response(200, results)
     except Exception as e:
         log.exception("Failed to compute draft urgency")

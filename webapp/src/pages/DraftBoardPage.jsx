@@ -551,6 +551,23 @@ export default function DraftBoardPage() {
     .filter((r) => (r.player_name ?? '').toLowerCase().includes(searchText.trim().toLowerCase()))
 
   const sortedRows = [...filteredRows].sort((a, b) => {
+    // Urgency is a compound sort, not a plain numeric one - tier ALWAYS
+    // dominates (a tier 4 player must never outrank a tier 3 player at
+    // the same position, full stop), with urgency_score only breaking
+    // ties within the same tier. This has to be enforced here too, not
+    // just in the Lambda's own default ordering, since clicking this
+    // column header re-sorts client-side using whatever's in urgency_score
+    // - a plain numeric compare on that field alone wouldn't preserve the
+    // guarantee. Untiered rows (no tier_cliff computed at all) sort last
+    // regardless of direction.
+    if (sortKey === 'urgency_score') {
+      const aTier = a.tier ?? Infinity
+      const bTier = b.tier ?? Infinity
+      if (aTier !== bTier) return aTier - bTier
+      const cmp = (a.urgency_score ?? -Infinity) - (b.urgency_score ?? -Infinity)
+      return sortDir === 'asc' ? cmp : -cmp
+    }
+
     const av = a[sortKey]
     const bv = b[sortKey]
     if (av == null) return 1
