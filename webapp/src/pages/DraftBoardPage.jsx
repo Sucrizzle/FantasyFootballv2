@@ -71,7 +71,7 @@ const COLUMNS = [
   { key: 'pos', label: 'Pos' },
   { key: 'team', label: 'Team' },
   { key: 'player_name', label: 'Player_Name', format: formatPlayerName },
-  { key: 'adp_rank', label: 'ADP', format: (v) => (typeof v === 'number' ? `#${v}` : '—') },
+  { key: 'adp_rank', label: 'ADP', format: (v) => (typeof v === 'number' ? v : '—') },
   { key: 'proj_fpts_pg', label: 'Proj PPG', format: fixed2 },
   { key: 'draft_score', label: 'Draft Score', format: formatDraftScore },
   { key: 'urgency_score', label: 'Urgency', format: formatDraftScore },
