@@ -415,7 +415,7 @@ export default function DraftBoardPage() {
   // bails out and re-renders immediately with the reset applied, before
   // anything commits to the screen, rather than committing once and then
   // re-rendering a beat later via an effect.
-  const filterKey = `${searchText}|${JSON.stringify(selectedPositions)}|${pageSize}`
+  const filterKey = `${searchText}|${JSON.stringify(selectedPositions)}|${pageSize}|${sortKey}|${sortDir}`
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey)
