@@ -134,7 +134,8 @@
 
 .draft-board-row-actions {
   display: flex;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.3rem;
 }
 
 .draft-board-action-btn {
