@@ -132,8 +132,14 @@
   display: inline-block;
 }
 
-.draft-board-hide-btn {
-  margin-left: 0.4rem;
+.draft-board-row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.draft-board-action-btn {
+  width: 4.5rem;
+  text-align: center;
 }
 
 .draft-board-hidden-panel {

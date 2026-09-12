@@ -764,9 +764,10 @@ export default function DraftBoardPage() {
                     {COLUMNS.map((col) => (
                       <td key={col.key}>{col.format ? col.format(row[col.key], row) : row[col.key]}</td>
                     ))}
-                    <td>
+                    <td className="draft-board-row-actions">
                       <button
                         type="button"
+                        className="draft-board-action-btn"
                         disabled={!onTheClock}
                         onClick={(e) => {
                           e.stopPropagation()
@@ -777,7 +778,7 @@ export default function DraftBoardPage() {
                       </button>
                       <button
                         type="button"
-                        className="draft-board-hide-btn"
+                        className="draft-board-action-btn"
                         onClick={(e) => {
                           e.stopPropagation()
                           hidePlayer(row)
