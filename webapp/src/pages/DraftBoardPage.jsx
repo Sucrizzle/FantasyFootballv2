@@ -12,6 +12,28 @@ const MY_TEAM_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/my_team` : nul
 const ROSTER_POSITIONS_CONFIG_URL = API_BASE_URL ? `${API_BASE_URL}/config/roster_positions` : null
 const DRAFT_URGENCY_API_URL = API_BASE_URL ? `${API_BASE_URL}/draft-urgency` : null
 
+// Per-browser preference, not shared draft state - "I'm not drafting this
+// guy" has nothing to do with what's actually happened in the draft, so it
+// lives in localStorage rather than DynamoDB (same reasoning as Sidebar's
+// collapsed state or TrustDeviceBanner's asked-flag).
+const HIDDEN_PLAYERS_KEY = 'ffm.hiddenPlayers'
+
+function loadHiddenKeys() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(HIDDEN_PLAYERS_KEY) || '[]'))
+  } catch {
+    return new Set()
+  }
+}
+
+function saveHiddenKeys(keys) {
+  try {
+    localStorage.setItem(HIDDEN_PLAYERS_KEY, JSON.stringify([...keys]))
+  } catch {
+    // localStorage unavailable (private browsing, etc.) - just won't persist across reloads.
+  }
+}
+
 // Snake reverses team_order every other round; round_robin repeats the
 // same order every round. pick_number is 1-indexed and guaranteed gapless
 // by DraftState.py (server-computed, undo-last-only) - safe to derive
@@ -390,6 +412,8 @@ export default function DraftBoardPage() {
   // a live recommendation layer on top of the board, not core data the
   // page can't function without.
   const [urgencyByKey, setUrgencyByKey] = useState({})
+  const [hiddenKeys, setHiddenKeys] = useState(loadHiddenKeys)
+  const [showHidden, setShowHidden] = useState(false)
   const [draftError, setDraftError] = useState('')
   const [loadStatus, setLoadStatus] = useState('loading') // loading | ready | error
   const [message, setMessage] = useState('')
@@ -414,7 +438,7 @@ export default function DraftBoardPage() {
   // bails out and re-renders immediately with the reset applied, before
   // anything commits to the screen, rather than committing once and then
   // re-rendering a beat later via an effect.
-  const filterKey = `${searchText}|${JSON.stringify(selectedPositions)}|${pageSize}|${sortKey}|${sortDir}`
+  const filterKey = `${searchText}|${JSON.stringify(selectedPositions)}|${pageSize}|${sortKey}|${sortDir}|${hiddenKeys.size}`
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey)
@@ -432,12 +456,24 @@ export default function DraftBoardPage() {
   // handling - the board is fully usable without urgency scores (Draft
   // Score alone still works), so a missing/erroring DraftUrgency Lambda
   // shouldn't block the page from loading OR a pick from registering.
-  async function refreshUrgency() {
+  // `hiddenOverride` lets hidePlayer/unhidePlayer pass the just-computed
+  // Set directly, since the `hiddenKeys` state var itself won't reflect
+  // the change until React re-renders.
+  async function refreshUrgency(hiddenOverride) {
     if (!DRAFT_URGENCY_API_URL) return
     try {
       const session = await fetchAuthSession()
       const idToken = session.tokens?.idToken?.toString()
-      const urgencyRes = await fetch(DRAFT_URGENCY_API_URL, { headers: { Authorization: idToken } })
+      // Hidden players excluded from the calc too, not just the display -
+      // the Lambda treats them exactly like an already-drafted pick (see
+      // DraftUrgency.py) so survival/fallback/impact math for everyone
+      // else doesn't get thrown off by a player nobody's actually
+      // planning to take.
+      const hiddenParam = [...(hiddenOverride ?? hiddenKeys)].map((k) => k.replace('|', ':')).join(',')
+      const urgencyUrl = hiddenParam
+        ? `${DRAFT_URGENCY_API_URL}?hidden=${encodeURIComponent(hiddenParam)}`
+        : DRAFT_URGENCY_API_URL
+      const urgencyRes = await fetch(urgencyUrl, { headers: { Authorization: idToken } })
       const urgencyBody = await urgencyRes.json()
       if (!urgencyRes.ok) throw new Error(urgencyBody.error || `Request failed with status ${urgencyRes.status}`)
       const byKey = {}
@@ -537,7 +573,12 @@ export default function DraftBoardPage() {
   // once picked, there's nothing left to decide about them here (edits/undo
   // live on the Draft Log page instead).
   const pickedKeys = new Set(picks.map((p) => `${p.entity_id}|${p.pos}`))
-  const undraftedRows = rows.filter((r) => !pickedKeys.has(`${r.entity_id}|${r.pos}`))
+  const undraftedRows = rows.filter(
+    (r) => !pickedKeys.has(`${r.entity_id}|${r.pos}`) && !hiddenKeys.has(`${r.entity_id}|${r.pos}`),
+  )
+  // Kept as full row objects (not just keys) so the Hidden Players panel
+  // can display name/team/pos without a second lookup against `rows`.
+  const hiddenRows = rows.filter((r) => hiddenKeys.has(`${r.entity_id}|${r.pos}`))
 
   // pick_number is guaranteed gapless by DraftState.py (server-computed,
   // undo-last-only), so the next pick number is always just the count.
@@ -596,6 +637,30 @@ export default function DraftBoardPage() {
     }
   }
 
+  // Hiding is purely a client preference - "I'm not drafting this guy" -
+  // so it never touches DraftState/picks, just localStorage plus asking
+  // the Lambda to redo urgency with this player excluded from the pool
+  // (same reasoning as draftPlayer calling refreshUrgency above).
+  // Builds the next Set up front (rather than inside setHiddenKeys'
+  // updater) so refreshUrgency, called right after, sees the change
+  // immediately instead of the stale pre-update state React would still
+  // have in this closure.
+  function hidePlayer(row) {
+    const next = new Set(hiddenKeys)
+    next.add(`${row.entity_id}|${row.pos}`)
+    saveHiddenKeys(next)
+    setHiddenKeys(next)
+    refreshUrgency(next)
+  }
+
+  function unhidePlayer(row) {
+    const next = new Set(hiddenKeys)
+    next.delete(`${row.entity_id}|${row.pos}`)
+    saveHiddenKeys(next)
+    setHiddenKeys(next)
+    refreshUrgency(next)
+  }
+
   return (
     <div className="draft-board-page">
       <h2>Draft Board</h2>
@@ -648,6 +713,28 @@ export default function DraftBoardPage() {
               ))}
             </select>
           </label>
+          <button type="button" onClick={() => setShowHidden((v) => !v)}>
+            {showHidden ? 'Hide' : 'Show'} Hidden Players ({hiddenRows.length})
+          </button>
+        </div>
+      )}
+
+      {loadStatus === 'ready' && showHidden && (
+        <div className="draft-board-hidden-panel">
+          {hiddenRows.length === 0 ? (
+            <p>No hidden players.</p>
+          ) : (
+            <ul>
+              {hiddenRows.map((row) => (
+                <li key={`${row.pos}-${row.entity_id}`}>
+                  <span>{row.player_name} ({row.pos})</span>
+                  <button type="button" onClick={() => unhidePlayer(row)}>
+                    Unhide
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -687,6 +774,16 @@ export default function DraftBoardPage() {
                         }}
                       >
                         Draft
+                      </button>
+                      <button
+                        type="button"
+                        className="draft-board-hide-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          hidePlayer(row)
+                        }}
+                      >
+                        Hide
                       </button>
                     </td>
                   </tr>

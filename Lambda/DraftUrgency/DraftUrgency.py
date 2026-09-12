@@ -46,12 +46,16 @@ Static reference data doesn't change during a draft - cached in a
 module-level global, re-fetched only on cold start. Only the DynamoDB scan
 is fresh every call.
 
-    GET /draft-urgency
+    GET /draft-urgency?hidden=entity_id:pos,entity_id:pos,...
         -> 200 [{"entity_id", "pos", "proj_fpts_pg", "draft_score", "tier",
                  "impact_now", "fallback_entity_id", "impact_fallback",
                  "gone_probability", "expected_position_picks",
                  "urgency_score"}, ...]
-        Sorted by urgency_score descending. Undrafted players only.
+        Sorted by urgency_score descending. Undrafted, unhidden players
+        only - `hidden` (optional) excludes a client's hidden-players list
+        from the pool exactly like a real pick, so survival/fallback/
+        impact math treats them as already gone without them actually
+        being drafted or belonging to anyone's roster.
 
 Deploy notes:
     - Runtime: Python 3.12. Needs the duckdb layer.
@@ -403,7 +407,26 @@ def handler(event, context):
         picked_keys = {(p["entity_id"], p["pos"]) for p in picks}
         adp_by_entity = {p["entity_id"]: p["adp_rank"] for p in all_players if p["adp_rank"] is not None}
 
-        undrafted = [p for p in all_players if (p["entity_id"], p["pos"]) not in picked_keys]
+        # Hidden players (a client-side, per-browser preference - "I'm not
+        # drafting this guy, stop showing him up top") are passed in as a
+        # query param and excluded from the AVAILABLE pool exactly like a
+        # real pick, so survival/fallback/impact math all treats them as
+        # already gone. Deliberately NOT added to `picks`/`picked_keys`
+        # themselves - hiding a player doesn't actually advance the draft
+        # or belong to any team's roster, it just removes them from
+        # everyone's pool of realistic options for this one call.
+        query_params = event.get("queryStringParameters") or {}
+        hidden_keys = set()
+        for pair in (query_params.get("hidden") or "").split(","):
+            if ":" in pair:
+                entity_id, pos = pair.split(":", 1)
+                hidden_keys.add((entity_id, pos))
+
+        undrafted = [
+            p for p in all_players
+            if (p["entity_id"], p["pos"]) not in picked_keys
+            and (p["entity_id"], p["pos"]) not in hidden_keys
+        ]
         pick_number = len(picks) + 1
 
         # Position-level forecast: computed once per position (6 total),

@@ -132,6 +132,31 @@
   display: inline-block;
 }
 
+.draft-board-hide-btn {
+  margin-left: 0.4rem;
+}
+
+.draft-board-hidden-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--panel-border, #444);
+  border-radius: 4px;
+}
+
+.draft-board-hidden-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.draft-board-hidden-panel li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+}
+
 .draft-board-position-filter-menu {
   position: absolute;
   top: 100%;
